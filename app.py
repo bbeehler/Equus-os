@@ -8,8 +8,8 @@ import datetime
 st.set_page_config(page_title="EquusOS Hub", page_icon="🐎", layout="wide")
 
 # Replace with your Supabase credentials (or set via .streamlit/secrets.toml)
-SUPABASE_URL = "YOUR_SUPABASE_URL_HERE"
-SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY_HERE"
+SUPABASE_URL = "https://pvaebmdgnozmgswsygnj.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2YWVibWRnbm96bWdzd3N5Z25qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY4OTkzNDIsImV4cCI6MjEwMjQ3NTM0Mn0.pgIQn8vPFqRN9X03qmeAX0AAR_n9fnkgeBDJ1LASuO0"
 
 @st.cache_resource
 def init_supabase() -> Client:
