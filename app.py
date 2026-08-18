@@ -262,42 +262,44 @@ elif page == "Smart Route Booking":
         )
 
         if st.form_submit_button("Confirm Booking"):
-          barn_id_val = chosen_horse.get("barn_id")
+          try:
+            barn_id_val = chosen_horse.get("barn_id")
 
-          # Count existing bookings on the same day at the same barn
-          query = (
-              supabase.table("appointments")
-              .select("id")
-              .eq("appointment_date", str(app_date))
-          )
-          if barn_id_val:
-            query = query.eq("barn_id", barn_id_val)
+            # Check existing bookings count
+            query = (
+                supabase.table("appointments")
+                .select("id")
+                .eq("appointment_date", str(app_date))
+            )
+            if barn_id_val:
+              query = query.eq("barn_id", barn_id_val)
 
-          appts_res = query.execute()
-          same_day_count = (len(appts_res.data) if appts_res.data else 0) + 1
+            appts_res = query.execute()
+            same_day_count = (len(appts_res.data) if appts_res.data else 0) + 1
 
-          travel_fee, is_waived, reason = calculate_travel_fee(
-              float(distance), same_day_count
-          )
+            travel_fee, is_waived, reason = calculate_travel_fee(
+                float(distance), same_day_count
+            )
 
-          # Clean payload
-          payload = {
-              "appointment_date": str(app_date),
-              "horse_id": chosen_horse["id"],
-              "distance_from_base_km": float(distance),
-              "travel_fee": float(travel_fee),
-              "status": "Confirmed",
-          }
-          if barn_id_val:
-            payload["barn_id"] = barn_id_val
+            payload = {
+                "appointment_date": str(app_date),
+                "horse_id": str(chosen_horse["id"]),
+                "distance_from_base_km": float(distance),
+                "travel_fee": float(travel_fee),
+                "status": "Confirmed",
+            }
+            if barn_id_val:
+              payload["barn_id"] = str(barn_id_val)
 
-          supabase.table("appointments").insert(payload).execute()
+            supabase.table("appointments").insert(payload).execute()
 
-          st.success(
-              f"Appointment Confirmed! Travel Fee: ${travel_fee:.2f} CAD"
-              f" ({reason})"
-          )
-          st.rerun()
+            st.success(
+                f"Appointment Confirmed! Travel Fee: ${travel_fee:.2f} CAD"
+                f" ({reason})"
+            )
+            st.rerun()
+          except Exception as err:
+            st.error(f"Database Insert Error: {err}")
 
   with col2:
     st.subheader("Designated Corridor Days")
@@ -310,27 +312,30 @@ elif page == "Smart Route Booking":
         """)
 
   st.subheader("Scheduled Route Dispatches")
-  appts_res = (
-      supabase.table("appointments")
-      .select("*")
-      .order("appointment_date")
-      .execute()
-  )
-  appts = appts_res.data if appts_res.data else []
-  horse_map = {h["id"]: h for h in horses}
+  try:
+    appts_res = (
+        supabase.table("appointments")
+        .select("*")
+        .order("appointment_date")
+        .execute()
+    )
+    appts = appts_res.data if appts_res.data else []
+    horse_map = {h["id"]: h for h in horses}
 
-  if appts:
-    for a in appts:
-      h_obj = horse_map.get(a.get("horse_id"), {})
-      b_name = h_obj.get("barn_details", {}).get("name", "Barn")
-      st.write(
-          f"📅 **{a.get('appointment_date')}** |"
-          f" **{h_obj.get('name', 'Horse')}** @ {b_name} | Travel Fee:"
-          f" `${float(a.get('travel_fee', 0)):.2f}` CAD"
-      )
-  else:
-    st.write("No appointments scheduled.")
-
+    if appts:
+      for a in appts:
+        h_obj = horse_map.get(a.get("horse_id"), {})
+        b_name = h_obj.get("barn_details", {}).get("name", "Barn")
+        st.write(
+            f"📅 **{a.get('appointment_date')}** |"
+            f" **{h_obj.get('name', 'Horse')}** @ {b_name} | Travel Fee:"
+            f" `${float(a.get('travel_fee', 0)):.2f}` CAD"
+        )
+    else:
+      st.write("No appointments scheduled.")
+  except Exception as e:
+    st.error(f"Could not load scheduled appointments: {e}")
+    
 # ----------------------------------------------------
 # Page 3: Client Health Portal
 # ----------------------------------------------------
