@@ -133,7 +133,7 @@ if page == "Operations & Treatment Feed":
                 st.info("Please register a horse first.")
 
     st.subheader("Live Clinical Treatment Feed")
-        logs_res = supabase.table("treatment_logs").select("*, horses(*, barns(*))").order("created_at", desc=True).execute()
+    logs_res = supabase.table("treatment_logs").select("*, horses(*, barns(*))").order("created_at", desc=True).execute()
     if logs_res.data:
         for log in logs_res.data:
             with st.container():
