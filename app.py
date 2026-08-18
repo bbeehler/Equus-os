@@ -265,27 +265,31 @@ elif page == "Smart Route Booking":
         )
 
         if st.form_submit_button("Confirm Booking"):
+          # Count bookings on same day at same barn
           appts_res = (
               supabase.table("appointments")
-              .select("*")
+              .select("id")
               .eq("appointment_date", str(app_date))
-              .eq("barn_id", chosen_horse.get("barn_id"))
+              .eq("barn_id", str(chosen_horse.get("barn_id")))
               .execute()
           )
           same_day_count = (len(appts_res.data) if appts_res.data else 0) + 1
 
           travel_fee, is_waived, reason = calculate_travel_fee(
-              distance, same_day_count
+              float(distance), same_day_count
           )
 
-          supabase.table("appointments").insert({
+          # Clean payload
+          booking_payload = {
               "appointment_date": str(app_date),
-              "horse_id": chosen_horse["id"],
+              "horse_id": str(chosen_horse["id"]),
               "barn_id": chosen_horse.get("barn_id"),
-              "distance_from_base_km": distance,
-              "travel_fee": travel_fee,
+              "distance_from_base_km": float(distance),
+              "travel_fee": float(travel_fee),
               "status": "Confirmed",
-          }).execute()
+          }
+
+          supabase.table("appointments").insert(booking_payload).execute()
 
           st.success(
               f"Appointment Confirmed! Travel Fee: ${travel_fee:.2f} CAD"
