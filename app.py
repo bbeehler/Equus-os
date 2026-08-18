@@ -133,18 +133,22 @@ if page == "Operations & Treatment Feed":
                 st.info("Please register a horse first.")
 
     st.subheader("Live Clinical Treatment Feed")
-    logs_res = supabase.table("treatment_logs").select("*, horses(*, barns(*))").order("created_at", desc=True).execute()
-    if logs_res.data:
-        for log in logs_res.data:
+    logs_res = supabase.table("treatment_logs").select("*").order("created_at", desc=True).execute()
+    logs = logs_res.data if logs_res.data else []
+    horse_map = {h["id"]: h for h in horses}
+
+    if logs:
+        for log in logs:
             with st.container():
                 c1, c2 = st.columns([4, 1])
+                h_info = horse_map.get(log.get("horse_id"), {})
+                b_info = h_info.get("barn_details", {})
                 with c1:
-                    h_info = log.get("horses", {})
-                    st.markdown(f"**{h_info.get('name', 'Unknown')}** *(Owner: {h_info.get('owner_name')})* — `{log['modality']}` ({log['duration_minutes']} mins)")
-                    st.caption(f"{log['session_notes']}")
+                    st.markdown(f"**{h_info.get('name', 'Unknown')}** *(Owner: {h_info.get('owner_name', 'N/A')} | {b_info.get('name', 'No Barn')})* — `{log.get('modality', 'Therapy')}` ({log.get('duration_minutes', 20)} mins)")
+                    st.caption(f"{log.get('session_notes', '')}")
                 with c2:
-                    st.markdown(f"### ${float(log['calculated_fee']):.2f}")
-                    st.caption(f"{log['created_at'][:10]}")
+                    st.markdown(f"### ${float(log.get('calculated_fee', 0)):.2f}")
+                    st.caption(f"{log.get('created_at', '')[:10]}")
                 st.divider()
     else:
         st.write("No treatments recorded yet.")
