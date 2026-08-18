@@ -31,19 +31,16 @@ def calculate_session_fee(
 ):
   new_total = previous_minutes + duration_minutes
 
-  # Non-flagship barns: $2.00/min or $60 for standard 20-min session
   if not is_flagship:
     fee = 60.0 if duration_minutes == 20 else duration_minutes * 2.0
     return fee, new_total, "Standard Mobile Rate ($2.00/min)"
 
-  # Flagship Marketing Tier (3 Promo Horses): First 200 mins free, then $1.00/min
   if is_marketing_tier:
     if new_total <= 200:
       return 0.0, new_total, "Promo Allowance (100% Free)"
     billable = duration_minutes if previous_minutes >= 200 else (new_total - 200)
     return float(billable * 1.0), new_total, "Marketing Tier Overage ($1.00/min)"
 
-  # Flagship Standard Tier (9 Horses): Baseline <= 200 mins @ $1.00/min, overage @ $2.00/min
   if previous_minutes >= 200:
     return (
         float(duration_minutes * 2.0),
@@ -181,7 +178,7 @@ if page == "Operations & Treatment Feed":
                 "is_flagship", False
             )
             fee, updated_mins, note = calculate_session_fee(
-                duration,
+                int(duration),
                 is_flagship,
                 h_obj.get("is_marketing_tier", False),
                 h_obj.get("minutes_used_this_month", 0),
@@ -190,8 +187,8 @@ if page == "Operations & Treatment Feed":
             supabase.table("treatment_logs").insert({
                 "horse_id": h_obj["id"],
                 "modality": modality,
-                "duration_minutes": duration,
-                "calculated_fee": fee,
+                "duration_minutes": int(duration),
+                "calculated_fee": float(fee),
                 "session_notes": f"{notes} [Billing: {note}]",
             }).execute()
 
@@ -265,14 +262,18 @@ elif page == "Smart Route Booking":
         )
 
         if st.form_submit_button("Confirm Booking"):
-          # Count bookings on same day at same barn
-          appts_res = (
+          barn_id_val = chosen_horse.get("barn_id")
+
+          # Count existing bookings on the same day at the same barn
+          query = (
               supabase.table("appointments")
               .select("id")
               .eq("appointment_date", str(app_date))
-              .eq("barn_id", str(chosen_horse.get("barn_id")))
-              .execute()
           )
+          if barn_id_val:
+            query = query.eq("barn_id", barn_id_val)
+
+          appts_res = query.execute()
           same_day_count = (len(appts_res.data) if appts_res.data else 0) + 1
 
           travel_fee, is_waived, reason = calculate_travel_fee(
@@ -280,16 +281,17 @@ elif page == "Smart Route Booking":
           )
 
           # Clean payload
-          booking_payload = {
+          payload = {
               "appointment_date": str(app_date),
-              "horse_id": str(chosen_horse["id"]),
-              "barn_id": chosen_horse.get("barn_id"),
+              "horse_id": chosen_horse["id"],
               "distance_from_base_km": float(distance),
               "travel_fee": float(travel_fee),
               "status": "Confirmed",
           }
+          if barn_id_val:
+            payload["barn_id"] = barn_id_val
 
-          supabase.table("appointments").insert(booking_payload).execute()
+          supabase.table("appointments").insert(payload).execute()
 
           st.success(
               f"Appointment Confirmed! Travel Fee: ${travel_fee:.2f} CAD"
@@ -395,7 +397,6 @@ elif page == "Monthly Invoicing & Exports":
     chosen_barn_name = st.selectbox("Select Barn / Facility", list(barn_opts.keys()))
     chosen_barn_id = barn_opts[chosen_barn_name]
 
-    # Filter horses at this facility
     facility_horses = [h for h in horses if h.get("barn_id") == chosen_barn_id]
     facility_horse_ids = [h["id"] for h in facility_horses]
 
