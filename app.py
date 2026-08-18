@@ -1,4 +1,5 @@
 import datetime
+import pandas as pd
 import streamlit as st
 from supabase import Client, create_client
 
@@ -73,7 +74,6 @@ def calculate_travel_fee(distance_km: float, same_day_horses: int):
 
 
 def get_data_maps():
-  # Safe un-nested queries to prevent PostgREST relation errors
   barns_res = supabase.table("barns").select("*").execute()
   barns = barns_res.data if barns_res.data else []
   barn_map = {b["id"]: b for b in barns}
@@ -83,7 +83,12 @@ def get_data_maps():
   for h in horses:
     h["barn_details"] = barn_map.get(
         h.get("barn_id"),
-        {"name": "No Barn", "is_flagship": False, "rate_per_minute": 2.0},
+        {
+            "name": "No Barn",
+            "is_flagship": False,
+            "rate_per_minute": 2.0,
+            "address": "",
+        },
     )
 
   return barns, horses, barn_map
@@ -100,6 +105,7 @@ page = st.sidebar.radio(
         "Operations & Treatment Feed",
         "Smart Route Booking",
         "Client Health Portal",
+        "Monthly Invoicing & Exports",
     ],
 )
 
@@ -181,7 +187,6 @@ if page == "Operations & Treatment Feed":
                 h_obj.get("minutes_used_this_month", 0),
             )
 
-            # Insert treatment log
             supabase.table("treatment_logs").insert({
                 "horse_id": h_obj["id"],
                 "modality": modality,
@@ -190,7 +195,6 @@ if page == "Operations & Treatment Feed":
                 "session_notes": f"{notes} [Billing: {note}]",
             }).execute()
 
-            # Update monthly minutes count
             supabase.table("horses").update(
                 {"minutes_used_this_month": updated_mins}
             ).eq("id", h_obj["id"]).execute()
@@ -261,7 +265,6 @@ elif page == "Smart Route Booking":
         )
 
         if st.form_submit_button("Confirm Booking"):
-          # Count bookings on same day at same barn
           appts_res = (
               supabase.table("appointments")
               .select("*")
@@ -329,7 +332,7 @@ elif page == "Client Health Portal":
   st.title("Client Health & Progress Portal")
   st.markdown(
       "Transparent access for horse owners to review clinical notes and session"
-      " logs[cite: 7]."
+      " logs."
   )
 
   if horses:
@@ -372,3 +375,77 @@ elif page == "Client Health Portal":
       st.write("No session records found for this horse.")
   else:
     st.info("No horses registered in the database yet.")
+
+# ----------------------------------------------------
+# Page 4: Monthly Invoicing & Exports
+# ----------------------------------------------------
+elif page == "Monthly Invoicing & Exports":
+  st.title("Monthly Invoicing & Billing Summary")
+  st.markdown(
+      "Generate monthly billing breakdowns and export itemized CSV statements"
+      " for barns and owners."
+  )
+
+  if barns:
+    barn_opts = {b["name"]: b["id"] for b in barns}
+    chosen_barn_name = st.selectbox("Select Barn / Facility", list(barn_opts.keys()))
+    chosen_barn_id = barn_opts[chosen_barn_name]
+
+    # Filter horses at this facility
+    facility_horses = [h for h in horses if h.get("barn_id") == chosen_barn_id]
+    facility_horse_ids = [h["id"] for h in facility_horses]
+
+    logs_res = (
+        supabase.table("treatment_logs")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    all_logs = logs_res.data if logs_res.data else []
+    facility_logs = [
+        l for l in all_logs if l.get("horse_id") in facility_horse_ids
+    ]
+
+    horse_dict = {h["id"]: h for h in facility_horses}
+
+    if facility_logs:
+      invoice_rows = []
+      total_billed = 0.0
+
+      for l in facility_logs:
+        h = horse_dict.get(l.get("horse_id"), {})
+        fee = float(l.get("calculated_fee", 0))
+        total_billed += fee
+        invoice_rows.append({
+            "Date": l.get("created_at", "")[:10],
+            "Horse Name": h.get("name", "Unknown"),
+            "Owner": h.get("owner_name", "Unknown"),
+            "Modality": l.get("modality", ""),
+            "Duration (Mins)": l.get("duration_minutes", 0),
+            "Fee (CAD)": f"${fee:.2f}",
+            "Notes": l.get("session_notes", ""),
+        })
+
+      df_invoice = pd.DataFrame(invoice_rows)
+
+      c1, c2, c3 = st.columns(3)
+      c1.metric(
+          "Total Horses Active",
+          len(set([r["Horse Name"] for r in invoice_rows])),
+      )
+      c2.metric("Total Sessions", len(invoice_rows))
+      c3.metric("Facility Total Billed", f"${total_billed:.2f} CAD")
+
+      st.dataframe(df_invoice, use_container_width=True)
+
+      csv_data = df_invoice.to_csv(index=False).encode("utf-8")
+      st.download_button(
+          label="📥 Download Itemized Billing Statement (CSV)",
+          data=csv_data,
+          file_name=f"EquusOS_Invoice_{chosen_barn_name.replace(' ', '_')}_{datetime.date.today()}.csv",
+          mime="text/csv",
+      )
+    else:
+      st.info(f"No treatment sessions on record for {chosen_barn_name}.")
+  else:
+    st.info("No barns registered in the database.")
