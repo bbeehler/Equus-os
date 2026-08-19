@@ -1,5 +1,7 @@
 import datetime
+import io
 import pandas as pd
+from fpdf import FPDF
 import streamlit as st
 from supabase import Client, create_client
 
@@ -99,7 +101,101 @@ def get_data_maps():
 
 
 # ----------------------------------------------------
-# 3. Sidebar Navigation
+# 3. PDF Invoice Generator Class
+# ----------------------------------------------------
+class PDFInvoice(FPDF):
+
+  def header(self):
+    self.set_font("helvetica", "B", 16)
+    self.cell(
+        0, 8, "EQUUS PERFORMANCE THERAPEUTICS", 0, 1, "L"
+    )
+    self.set_font("helvetica", "", 10)
+    self.cell(
+        0,
+        5,
+        "Equine Cellular Regeneration & Pulmonary Recovery | Russell, ON",
+        0,
+        1,
+        "L",
+    )
+    self.ln(5)
+    self.set_draw_color(100, 100, 100)
+    self.line(10, self.get_y(), 200, self.get_y())
+    self.ln(5)
+
+  def footer(self):
+    self.set_y(-15)
+    self.set_font("helvetica", "I", 8)
+    self.cell(
+        0,
+        10,
+        f"Page {self.page_no()} | Equus Performance Therapeutics - Professional"
+        " Statement",
+        0,
+        0,
+        "C",
+    )
+
+
+def create_pdf_invoice(barn_name, invoice_rows, total_billed):
+  pdf = PDFInvoice()
+  pdf.add_page()
+  pdf.set_font("helvetica", "B", 14)
+  pdf.cell(
+      0,
+      8,
+      f"STATEMENT OF ACCOUNT: {barn_name.upper()}",
+      0,
+      1,
+      "L",
+  )
+
+  pdf.set_font("helvetica", "", 10)
+  pdf.cell(
+      0, 6, f"Statement Date: {datetime.date.today().strftime('%B %d, %Y')}", 0, 1
+  )
+  pdf.cell(0, 6, "Payment Terms: Due upon receipt via e-Transfer", 0, 1)
+  pdf.ln(5)
+
+  # Table Header
+  pdf.set_font("helvetica", "B", 9)
+  pdf.set_fill_color(240, 240, 240)
+  pdf.cell(22, 7, "Date", 1, 0, "C", True)
+  pdf.cell(38, 7, "Horse Name", 1, 0, "L", True)
+  pdf.cell(32, 7, "Owner", 1, 0, "L", True)
+  pdf.cell(38, 7, "Modality", 1, 0, "L", True)
+  pdf.cell(15, 7, "Mins", 1, 0, "C", True)
+  pdf.cell(22, 7, "Fee (CAD)", 1, 0, "R", True)
+  pdf.cell(23, 7, "Notes", 1, 1, "L", True)
+
+  # Table Rows
+  pdf.set_font("helvetica", "", 8)
+  for r in invoice_rows:
+    pdf.cell(22, 6, str(r["Date"]), 1, 0, "C")
+    pdf.cell(38, 6, str(r["Horse Name"][:20]), 1, 0, "L")
+    pdf.cell(32, 6, str(r["Owner"][:18]), 1, 0, "L")
+    pdf.cell(38, 6, str(r["Modality"][:20]), 1, 0, "L")
+    pdf.cell(15, 6, str(r["Duration (Mins)"]), 1, 0, "C")
+    pdf.cell(22, 6, str(r["Fee (CAD)"]), 1, 0, "R")
+    pdf.cell(23, 6, str(r["Notes"][:15]), 1, 1, "L")
+
+  pdf.ln(5)
+  pdf.set_font("helvetica", "B", 12)
+  pdf.cell(
+      0,
+      8,
+      f"Total Balance Due: ${total_billed:.2f} CAD",
+      0,
+      1,
+      "R",
+  )
+
+  return pdf.output()
+
+
+# ----------------------------------------------------
+# 4. Sidebar Navigation
 # ----------------------------------------------------
 st.sidebar.title("🐎 EquusOS")
 st.sidebar.caption("Equus Performance Therapeutics")
@@ -580,8 +676,8 @@ elif page == "Client Health Portal":
 elif page == "Monthly Invoicing & Exports":
   st.title("Monthly Invoicing & Billing Summary")
   st.markdown(
-      "Generate monthly billing breakdowns and export itemized CSV statements"
-      " for barns and owners."
+      "Generate monthly billing breakdowns and export professional PDF"
+      " statements for barns and owners."
   )
 
   if barns:
@@ -638,12 +734,16 @@ elif page == "Monthly Invoicing & Exports":
 
       st.dataframe(df_invoice, use_container_width=True)
 
-      csv_data = df_invoice.to_csv(index=False).encode("utf-8")
+      # Generate PDF bytes
+      pdf_output = create_pdf_invoice(
+          chosen_barn_name, invoice_rows, total_billed
+      )
+
       st.download_button(
-          label="📥 Download Itemized Billing Statement (CSV)",
-          data=csv_data,
-          file_name=f"EquusOS_Invoice_{chosen_barn_name.replace(' ', '_')}_{datetime.date.today()}.csv",
-          mime="text/csv",
+          label="📄 Download Professional PDF Invoice",
+          data=bytes(pdf_output),
+          file_name=f"EquusOS_Invoice_{chosen_barn_name.replace(' ', '_')}_{datetime.date.today()}.pdf",
+          mime="application/pdf",
       )
     else:
       st.info(f"No treatment sessions on record for {chosen_barn_name}.")
