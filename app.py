@@ -270,6 +270,7 @@ page = st.sidebar.radio(
         "Payments & Accounts Receivable",
         "Veterinary Clinical Reports",
         "Corridor Travel & Expense Tracker",
+        "Executive P&L Snapshot",
     ],
 )
 
@@ -836,7 +837,7 @@ elif page == "Corridor Calendar & Run-Sheet":
     st.dataframe(pd.DataFrame(outlook_rows), use_container_width=True)
 
 # ----------------------------------------------------
-# Page 5: Client Re-booking & Reminders (NEW MODULE 11)
+# Page 5: Client Re-booking & Reminders
 # ----------------------------------------------------
 elif page == "Client Re-booking & Reminders":
   st.title("💬 Automated Client Reminders & Re-Booking Hub")
@@ -931,10 +932,9 @@ elif page == "Client Re-booking & Reminders":
           "Copy Text", value=message_body, height=160, key="reminder_text_box"
       )
 
-      # Clean phone number for WhatsApp link
       clean_phone = "".join(filter(str.isdigit, phone_num))
       if len(clean_phone) == 10:
-        clean_phone = "1" + clean_phone  # Add North American country code
+        clean_phone = "1" + clean_phone
 
       if clean_phone:
         encoded_msg = urllib.parse.quote(message_body)
@@ -1579,3 +1579,111 @@ elif page == "Corridor Travel & Expense Tracker":
     st.dataframe(pd.DataFrame(exp_table_rows), use_container_width=True)
   else:
     st.write("No travel expenses recorded.")
+
+# ----------------------------------------------------
+# Page 12: Executive P&L Snapshot (NEW MODULE 12)
+# ----------------------------------------------------
+elif page == "Executive P&L Snapshot":
+  st.title("📊 Executive P&L Financial Performance")
+  st.markdown(
+      "Comprehensive profit & loss income statement tracking gross session"
+      " revenue, travel fees, operating overhead, and maintenance sinking"
+      " reserves."
+  )
+
+  # Fetch all treatment logs
+  try:
+    logs_res = supabase.table("treatment_logs").select("*").execute()
+    all_logs = logs_res.data if logs_res.data else []
+  except Exception:
+    all_logs = []
+
+  # Fetch all travel fees
+  try:
+    appts_res = supabase.table("appointments").select("*").execute()
+    all_appts = appts_res.data if appts_res.data else []
+  except Exception:
+    all_appts = []
+
+  # Fetch all expenses
+  try:
+    exp_res = supabase.table("corridor_expenses").select("*").execute()
+    all_expenses = exp_res.data if exp_res.data else []
+  except Exception:
+    all_expenses = []
+
+  # Financial Calculations
+  gross_session_rev = sum(float(l.get("calculated_fee", 0)) for l in all_logs)
+  gross_travel_rev = sum(float(a.get("travel_fee", 0)) for a in all_appts)
+  total_gross_rev = gross_session_rev + gross_travel_rev
+
+  # Total Equitron minutes logged for Sinking Fund Reserve ($0.12/min)
+  equitron_mins = sum(
+      int(l.get("duration_minutes", 0))
+      for l in all_logs
+      if l.get("modality") in ["Equitron-Pro (HECT)", "Peak Performance Combo"]
+  )
+  maintenance_reserve_allocation = equitron_mins * 0.12
+
+  total_operating_expenses = sum(
+      float(e.get("amount", 0)) for e in all_expenses
+  )
+  total_deductions_reserves = (
+      total_operating_expenses + maintenance_reserve_allocation
+  )
+  net_ebitda = total_gross_rev - total_deductions_reserves
+  profit_margin = (
+      (net_ebitda / total_gross_rev * 100) if total_gross_rev > 0 else 0.0
+  )
+
+  col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+  col_f1.metric("Total Gross Revenue", f"${total_gross_rev:,.2f} CAD")
+  col_f2.metric("Operating Overhead", f"${total_operating_expenses:,.2f} CAD")
+  col_f3.metric(
+      "Maintenance Reserve Fund",
+      f"${maintenance_reserve_allocation:,.2f} CAD",
+  )
+  col_f4.metric(
+      "Net EBITDA Profit",
+      f"${net_ebitda:,.2f} CAD",
+      delta=f"{profit_margin:.1f}% Margin",
+      delta_color="normal" if net_ebitda >= 0 else "inverse",
+  )
+
+  st.divider()
+
+  col_p1, col_p2 = st.columns([3, 2])
+
+  with col_p1:
+    st.subheader("Statement of Income & Expense Breakdown")
+
+    pnl_data = [
+        {"Line Item": "🟢 Equitron & Halo Session Revenue", "Amount (CAD)": f"${gross_session_rev:,.2f}"},
+        {"Line Item": "🟢 Regional Travel & Mileage Collected", "Amount (CAD)": f"${gross_travel_rev:,.2f}"},
+        {"Line Item": "👉 Total Gross Operating Revenue", "Amount (CAD)": f"${total_gross_rev:,.2f}"},
+        {"Line Item": "🔴 Vehicle Fuel & Mobile Travel Expenses", "Amount (CAD)": f"-${sum(float(e.get('amount', 0)) for e in all_expenses if e.get('category') == 'Fuel'):,.2f}"},
+        {"Line Item": "🔴 Vehicle Upkeep & Tolls", "Amount (CAD)": f"-${sum(float(e.get('amount', 0)) for e in all_expenses if e.get('category') in ['Vehicle Maintenance / Tires', 'Parking & Tolls']):,.2f}"},
+        {"Line Item": "🔴 Consumables & General Overhead", "Amount (CAD)": f"-${sum(float(e.get('amount', 0)) for e in all_expenses if e.get('category') in ['Equipment Consumables / Salt', 'Other Operational']):,.2f}"},
+        {"Line Item": "🟡 Sinking Fund Reserve (22k-Min Recertification @ $0.12/min)", "Amount (CAD)": f"-${maintenance_reserve_allocation:,.2f}"},
+        {"Line Item": "🏁 Net Operating Profit (Pre-Tax EBITDA)", "Amount (CAD)": f"${net_ebitda:,.2f}"},
+    ]
+
+    st.dataframe(pd.DataFrame(pnl_data), use_container_width=True)
+
+  with col_p2:
+    st.subheader("Tax Sinking & Reserve Allocation")
+    st.info(f"""
+        * **Equitron Lifetime Minutes:** {equitron_mins:,} Mins
+        * **Service Interval:** 22,000 Minutes ($2,000 + Freight)
+        * **Current Reserve Accrual:** **${maintenance_reserve_allocation:,.2f} CAD**
+        * **Recommended Tax Set-Aside (25% Est.):** **${max(0, net_ebitda * 0.25):,.2f} CAD**
+        """)
+
+    pnl_export_df = pd.DataFrame(pnl_data)
+    csv_pnl = pnl_export_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="📥 Export P&L Financial Statement (CSV)",
+        data=csv_pnl,
+        file_name=f"EquusOS_PNL_Statement_{datetime.date.today()}.csv",
+        mime="text/csv",
+    )
