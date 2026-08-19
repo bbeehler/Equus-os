@@ -129,7 +129,7 @@ class PDFInvoice(FPDF):
         0,
         10,
         f"Page {self.page_no()} | Equus Performance Therapeutics - Official"
-        " Statement",
+        " Record",
         0,
         0,
         "C",
@@ -186,7 +186,7 @@ def create_vet_report_pdf(horse_obj, vet_name, clinical_logs):
   pdf.cell(
       0, 5, f"Report Date: {datetime.date.today().strftime('%B %d, %Y')}", 0, 1
   )
-  pdf.cell(0, 5, f"Attending Specialist: Paige Cummings (EquusOS Hub)", 0, 1)
+  pdf.cell(0, 5, "Attending Specialist: Paige Cummings (EquusOS Hub)", 0, 1)
   pdf.ln(3)
 
   pdf.set_fill_color(245, 245, 245)
@@ -202,10 +202,18 @@ def create_vet_report_pdf(horse_obj, vet_name, clinical_logs):
       0,
       0,
   )
-  pdf.cell(90, 5, f"Facility: {horse_obj.get('barn_details', {}).get('name', 'N/A')}", 0, 1)
+  pdf.cell(
+      90,
+      5,
+      f"Facility: {horse_obj.get('barn_details', {}).get('name', 'N/A')}",
+      0,
+      1,
+  )
   pdf.set_xy(12, pdf.get_y())
   pdf.set_font("helvetica", "", 9)
-  pdf.cell(90, 5, f"Primary Veterinarian: {vet_name if vet_name else 'On File'}", 0, 0)
+  pdf.cell(
+      90, 5, f"Primary Veterinarian: {vet_name if vet_name else 'On File'}", 0, 0
+  )
   total_mins = sum(int(l.get("duration_minutes", 0)) for l in clinical_logs)
   pdf.cell(90, 5, f"Cumulative Therapy Logged: {total_mins} Minutes", 0, 1)
   pdf.ln(8)
@@ -257,6 +265,7 @@ page = st.sidebar.radio(
         "Monthly Invoicing & Exports",
         "Payments & Accounts Receivable",
         "Veterinary Clinical Reports",
+        "Corridor Travel & Expense Tracker",
     ],
 )
 
@@ -271,7 +280,6 @@ if page == "Operations & Treatment Feed":
       "Log sessions and manage horse profiles across regional facilities."
   )
 
-  # --- EQUIPMENT MAINTENANCE ODOMETER WIDGET ---
   with st.expander(
       "⚙️ Equitron-Pro Service Odometer & Maintenance Tracker", expanded=False
   ):
@@ -972,7 +980,6 @@ elif page == "Veterinary Clinical Reports":
       )
       chosen_horse_obj = horse_lookup[sel_label]
 
-      # Query waivers to check for veterinarian on file
       try:
         w_res = (
             supabase.table("client_waivers")
@@ -990,7 +997,6 @@ elif page == "Veterinary Clinical Reports":
           value=default_vet if default_vet else "Attending Equine DVM",
       )
 
-      # Fetch horse treatment logs
       try:
         h_logs_res = (
             supabase.table("treatment_logs")
@@ -1020,7 +1026,6 @@ elif page == "Veterinary Clinical Reports":
               f" {l.get('session_notes')}"
           )
 
-        # Generate Clinical PDF
         vet_pdf_bytes = create_vet_report_pdf(
             chosen_horse_obj, vet_contact_input, horse_logs
         )
@@ -1035,3 +1040,156 @@ elif page == "Veterinary Clinical Reports":
         st.info("No clinical sessions recorded for this horse yet.")
   else:
     st.info("Please register a horse profile first.")
+
+# ----------------------------------------------------
+# Page 8: Corridor Travel & Expense Tracker
+# ----------------------------------------------------
+elif page == "Corridor Travel & Expense Tracker":
+  st.title("🚗 Corridor Travel & Operational Expense Tracker")
+  st.markdown(
+      "Log travel expenses, track fuel and maintenance costs, and analyze net"
+      " profitability across regional corridors."
+  )
+
+  # Fetch all expenses
+  try:
+    exp_res = (
+        supabase.table("corridor_expenses")
+        .select("*")
+        .order("expense_date", desc=True)
+        .execute()
+    )
+    all_expenses = exp_res.data if exp_res.data else []
+  except Exception:
+    all_expenses = []
+
+  # Fetch appointment travel fees collected
+  try:
+    appts_res = supabase.table("appointments").select("travel_fee").execute()
+    all_appts = appts_res.data if appts_res.data else []
+    total_travel_collected = sum(
+        float(a.get("travel_fee", 0)) for a in all_appts
+    )
+  except Exception:
+    total_travel_collected = 0.0
+
+  total_expenses_logged = sum(
+      float(e.get("amount", 0)) for e in all_expenses
+  )
+  fuel_total = sum(
+      float(e.get("amount", 0))
+      for e in all_expenses
+      if e.get("category") == "Fuel"
+  )
+  net_travel_margin = total_travel_collected - total_expenses_logged
+
+  m1, m2, m3, m4 = st.columns(4)
+  m1.metric(
+      "Total Expenses Logged", f"${total_expenses_logged:,.2f} CAD"
+  )
+  m2.metric("Fuel Costs Total", f"${fuel_total:,.2f} CAD")
+  m3.metric(
+      "Mileage Fees Collected", f"${total_travel_collected:,.2f} CAD"
+  )
+  m4.metric(
+      "Net Travel Margin",
+      f"${net_travel_margin:,.2f} CAD",
+      delta=f"${net_travel_margin:,.2f}",
+      delta_color="normal" if net_travel_margin >= 0 else "inverse",
+  )
+
+  col_e1, col_e2 = st.columns(2)
+
+  with col_e1:
+    with st.expander("⛽ Log Travel Expense", expanded=True):
+      with st.form("log_expense_form"):
+        e_date = st.date_input("Expense Date", datetime.date.today())
+        e_corridor = st.selectbox(
+            "Regional Corridor",
+            [
+                "Monday: Ottawa Metro & Russell",
+                "Tuesday: Kingston Corridor (South)",
+                "Wednesday: Pembroke / Valley (North)",
+                "Thursday: Montreal Corridor (East)",
+                "Friday: Flagship Dedicated",
+                "General / Fleet Operations",
+            ],
+        )
+        e_category = st.selectbox(
+            "Expense Category",
+            [
+                "Fuel",
+                "Vehicle Maintenance / Tires",
+                "Parking & Tolls",
+                "Equipment Consumables / Salt",
+                "Other Operational",
+            ],
+        )
+        e_amount = st.number_input(
+            "Amount (CAD)", min_value=0.0, step=5.0, value=75.0
+        )
+        e_odo = st.number_input(
+            "Odometer Reading (km) - Optional",
+            min_value=0,
+            step=100,
+            value=0,
+        )
+        e_receipt = st.text_input("Receipt Ref / Vendor Name (Optional)")
+        e_notes = st.text_area("Expense Notes")
+
+        if st.form_submit_button("Record Operational Expense"):
+          if e_amount > 0:
+            try:
+              payload = {
+                  "expense_date": str(e_date),
+                  "corridor": e_corridor,
+                  "category": e_category,
+                  "amount": float(e_amount),
+                  "odometer_reading": int(e_odo) if e_odo > 0 else None,
+                  "receipt_ref": e_receipt,
+                  "notes": e_notes,
+              }
+              supabase.table("corridor_expenses").insert(payload).execute()
+              st.success(
+                  f"Recorded ${e_amount:.2f} CAD for {e_category} on"
+                  f" {e_corridor}!"
+              )
+              st.rerun()
+            except Exception as ex:
+              st.error(f"Error saving expense: {ex}")
+          else:
+            st.warning("Please enter a valid amount.")
+
+  with col_e2:
+    with st.expander("📈 Expense Category Breakdown", expanded=True):
+      if all_expenses:
+        cat_breakdown = {}
+        for e in all_expenses:
+          c = e.get("category", "Other")
+          cat_breakdown[c] = cat_breakdown.get(c, 0.0) + float(
+              e.get("amount", 0)
+          )
+
+        cat_rows = [
+            {"Category": k, "Total Spent": f"${v:,.2f} CAD"}
+            for k, v in cat_breakdown.items()
+        ]
+        st.dataframe(pd.DataFrame(cat_rows), use_container_width=True)
+      else:
+        st.write("No expenses logged yet.")
+
+  st.subheader("Expense Log History")
+  if all_expenses:
+    exp_table_rows = []
+    for e in all_expenses:
+      exp_table_rows.append({
+          "Date": e.get("expense_date"),
+          "Corridor": e.get("corridor"),
+          "Category": e.get("category"),
+          "Amount (CAD)": f"${float(e.get('amount', 0)):.2f}",
+          "Vendor / Ref": e.get("receipt_ref", ""),
+          "Notes": e.get("notes", ""),
+      })
+    st.dataframe(pd.DataFrame(exp_table_rows), use_container_width=True)
+  else:
+    st.write("No travel expenses recorded.")
