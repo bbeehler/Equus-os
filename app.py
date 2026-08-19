@@ -108,6 +108,7 @@ page = st.sidebar.radio(
     [
         "Operations & Treatment Feed",
         "Smart Route Booking",
+        "Client Intake & Waiver",
         "Client Health Portal",
         "Monthly Invoicing & Exports",
     ],
@@ -126,7 +127,7 @@ if page == "Operations & Treatment Feed":
 
   # --- EQUIPMENT MAINTENANCE ODOMETER WIDGET ---
   with st.expander(
-      "⚙️ Equitron-Pro Service Odometer & Maintenance Tracker", expanded=True
+      "⚙️ Equitron-Pro Service Odometer & Maintenance Tracker", expanded=False
   ):
     try:
       logs_res = (
@@ -138,7 +139,6 @@ if page == "Operations & Treatment Feed":
     except Exception:
       all_logs = []
 
-    # Sum minutes for Equitron and Combo sessions
     total_equitron_mins = sum(
         l.get("duration_minutes", 0)
         for l in all_logs
@@ -418,7 +418,110 @@ elif page == "Smart Route Booking":
     st.write("No appointments scheduled.")
 
 # ----------------------------------------------------
-# Page 3: Client Health Portal
+# Page 3: Client Intake & Waiver
+# ----------------------------------------------------
+elif page == "Client Intake & Waiver":
+  st.title("Client Onboarding & Legal Liability Waiver")
+  st.markdown(
+      "New clients must complete this intake form and execute the liability"
+      " acknowledgment prior to receiving treatment."
+  )
+
+  with st.form("client_waiver_form"):
+    st.subheader("1. Owner & Horse Details")
+    col_w1, col_w2 = st.columns(2)
+    with col_w1:
+      owner_name = st.text_input("Owner Full Name")
+      client_email = st.text_input("Email Address")
+      horse_name = st.text_input("Horse Competition Name")
+    with col_w2:
+      primary_vet = st.text_input("Primary Veterinarian Name")
+      vet_phone = st.text_input("Veterinarian Contact Number")
+
+    st.subheader("2. Modality Consent Selection")
+    consent_hect = st.checkbox(
+        "Consent for High-Energy Cell Treatment (Equitron-Pro / HECT)"
+    )
+    consent_halo = st.checkbox(
+        "Consent for Clinical Dry Salt Halotherapy (HaloEQ2)"
+    )
+
+    st.subheader("3. Terms & Liability Acknowledgment")
+    st.markdown("""
+        > **Scope of Practice & Release of Liability:**  
+        > Equus Performance Therapeutics provides non-invasive complementary equine wellness, cellular regeneration, and respiratory recovery support. These services do not replace formal veterinary diagnosis, medicine, or surgery. The undersigned owner confirms that the animal is free of acute, contagious infectious diseases, and releases Paige Cummings and Equus Performance Therapeutics from liability arising from complementary therapy applications.
+        """)
+
+    waiver_agreed = st.checkbox(
+        "I have read, understood, and agree to the terms of service and"
+        " liability waiver."
+    )
+    signature_name = st.text_input(
+        "Electronic Signature (Type Full Legal Name)"
+    )
+
+    if st.form_submit_button("Submit Intake & Signed Waiver"):
+      if owner_name and client_email and horse_name and signature_name:
+        if not waiver_agreed:
+          st.error(
+              "You must check the waiver agreement box to complete onboarding."
+          )
+        else:
+          try:
+            modalities_chosen = []
+            if consent_hect:
+              modalities_chosen.append("Equitron-Pro (HECT)")
+            if consent_halo:
+              modalities_chosen.append("HaloEQ2 (Halotherapy)")
+
+            supabase.table("client_waivers").insert({
+                "owner_name": owner_name,
+                "client_email": client_email,
+                "horse_name": horse_name,
+                "primary_veterinarian": primary_vet,
+                "vet_phone": vet_phone,
+                "modality_consent": modalities_chosen,
+                "waiver_agreed": waiver_agreed,
+                "signature_name": signature_name,
+            }).execute()
+
+            st.success(
+                f"Waiver successfully executed and archived for {horse_name}"
+                f" (Owner: {owner_name})!"
+            )
+          except Exception as e:
+            st.error(f"Error saving waiver: {e}")
+      else:
+        st.warning(
+            "Please fill in all required contact fields and provide your"
+            " electronic signature."
+        )
+
+  st.subheader("Archived Client Waivers & Onboarding Records")
+  try:
+    waivers_res = (
+        supabase.table("client_waivers")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    saved_waivers = waivers_res.data if waivers_res.data else []
+  except Exception:
+    saved_waivers = []
+
+  if saved_waivers:
+    for w in saved_waivers:
+      st.info(f"""
+            **Owner:** {w.get('owner_name')} ({w.get('client_email')}) | **Horse:** {w.get('horse_name')}  
+            **Veterinarian:** {w.get('primary_veterinarian', 'N/A')} ({w.get('vet_phone', 'N/A')})  
+            **Modalities Authorized:** {', '.join(w.get('modality_consent', []))}  
+            **Signed By:** {w.get('signature_name')} on {w.get('created_at', '')[:10]}
+            """)
+  else:
+    st.write("No waivers on record yet.")
+
+# ----------------------------------------------------
+# Page 4: Client Health Portal
 # ----------------------------------------------------
 elif page == "Client Health Portal":
   st.title("Client Health & Progress Portal")
@@ -472,7 +575,7 @@ elif page == "Client Health Portal":
     st.info("No horses registered in the database yet.")
 
 # ----------------------------------------------------
-# Page 4: Monthly Invoicing & Exports
+# Page 5: Monthly Invoicing & Exports
 # ----------------------------------------------------
 elif page == "Monthly Invoicing & Exports":
   st.title("Monthly Invoicing & Billing Summary")
