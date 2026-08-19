@@ -31,19 +31,16 @@ def calculate_session_fee(
 ):
   new_total = previous_minutes + duration_minutes
 
-  # Non-flagship barns: $2.00/min or $60 for standard 20-min session
   if not is_flagship:
     fee = 60.0 if duration_minutes == 20 else duration_minutes * 2.0
     return fee, new_total, "Standard Mobile Rate ($2.00/min)"
 
-  # Flagship Marketing Tier (3 Promo Horses): First 200 mins free, then $1.00/min
   if is_marketing_tier:
     if new_total <= 200:
       return 0.0, new_total, "Promo Allowance (100% Free)"
     billable = duration_minutes if previous_minutes >= 200 else (new_total - 200)
     return float(billable * 1.0), new_total, "Marketing Tier Overage ($1.00/min)"
 
-  # Flagship Standard Tier (9 Horses): Baseline <= 200 mins @ $1.00/min, overage @ $2.00/min
   if previous_minutes >= 200:
     return (
         float(duration_minutes * 2.0),
@@ -127,6 +124,66 @@ if page == "Operations & Treatment Feed":
       "Log sessions and manage horse profiles across regional facilities."
   )
 
+  # --- EQUIPMENT MAINTENANCE ODOMETER WIDGET ---
+  with st.expander(
+      "⚙️ Equitron-Pro Service Odometer & Maintenance Tracker", expanded=True
+  ):
+    try:
+      logs_res = (
+          supabase.table("treatment_logs")
+          .select("duration_minutes, modality")
+          .execute()
+      )
+      all_logs = logs_res.data if logs_res.data else []
+    except Exception:
+      all_logs = []
+
+    # Sum minutes for Equitron and Combo sessions
+    total_equitron_mins = sum(
+        l.get("duration_minutes", 0)
+        for l in all_logs
+        if l.get("modality")
+        in ["Equitron-Pro (HECT)", "Peak Performance Combo"]
+    )
+
+    SERVICE_INTERVAL = 22000
+    progress_val = min(total_equitron_mins / SERVICE_INTERVAL, 1.0)
+    remaining_mins = max(0, SERVICE_INTERVAL - total_equitron_mins)
+    sinking_fund_reserve = total_equitron_mins * 0.12
+
+    col_m1, col_m2, col_m3 = st.columns(3)
+    col_m1.metric(
+        "Lifetime Operating Minutes", f"{total_equitron_mins:,} Mins"
+    )
+    col_m2.metric(
+        "Minutes Until 22k Recertification", f"{remaining_mins:,} Mins"
+    )
+    col_m3.metric(
+        "Sinking Fund Reserve ($0.12/min)", f"${sinking_fund_reserve:,.2f} CAD"
+    )
+
+    st.progress(
+        progress_val,
+        text=f"Equipment Wear Progress: {total_equitron_mins:,} / {SERVICE_INTERVAL:,} Minutes",
+    )
+
+    if total_equitron_mins >= 20000:
+      st.error(
+          "⚠️ **MAINTENANCE WARNING:** Equitron-Pro is approaching or has"
+          " exceeded the 22,000-minute service threshold. Schedule"
+          " manufacturer overhaul ($2,000 + freight) and 1-week downtime."
+      )
+    elif total_equitron_mins >= 18000:
+      st.warning(
+          "🔔 **Notice:** Equipment is within 4,000 minutes of required"
+          " service. Plan upcoming shoulder-season halotherapy focus week."
+      )
+    else:
+      st.success(
+          "✅ **System Healthy:** Operating well within manufacturer service"
+          " parameters."
+      )
+
   col1, col2 = st.columns(2)
 
   with col1:
@@ -201,6 +258,7 @@ if page == "Operations & Treatment Feed":
               supabase.table("treatment_logs").insert({
                   "horse_id": str(h_obj["id"]),
                   "modality": str(modality),
+                  "therapies_used": [str(modality)],
                   "duration_minutes": int(duration),
                   "calculated_fee": float(fee),
                   "session_notes": f"{notes} [Billing: {note}]",
@@ -288,7 +346,6 @@ elif page == "Smart Route Booking":
           try:
             barn_id_val = chosen_horse.get("barn_id")
 
-            # Check existing bookings count
             query = (
                 supabase.table("appointments")
                 .select("id")
@@ -304,7 +361,6 @@ elif page == "Smart Route Booking":
                 float(distance), same_day_count
             )
 
-            # Insert with clean types
             payload = {
                 "appointment_date": str(app_date),
                 "horse_id": str(chosen_horse["id"]),
