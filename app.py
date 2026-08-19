@@ -101,7 +101,7 @@ def get_data_maps():
 
 
 # ----------------------------------------------------
-# 3. PDF Invoice Generator Class
+# 3. PDF Generator Classes
 # ----------------------------------------------------
 class PDFInvoice(FPDF):
 
@@ -128,7 +128,7 @@ class PDFInvoice(FPDF):
     self.cell(
         0,
         10,
-        f"Page {self.page_no()} | Equus Performance Therapeutics - Professional"
+        f"Page {self.page_no()} | Equus Performance Therapeutics - Official"
         " Statement",
         0,
         0,
@@ -149,7 +149,6 @@ def create_pdf_invoice(barn_name, invoice_rows, total_billed):
   pdf.cell(0, 6, "Payment Terms: Due upon receipt via e-Transfer", 0, 1)
   pdf.ln(5)
 
-  # Table Header
   pdf.set_font("helvetica", "B", 9)
   pdf.set_fill_color(240, 240, 240)
   pdf.cell(22, 7, "Date", 1, 0, "C", True)
@@ -160,7 +159,6 @@ def create_pdf_invoice(barn_name, invoice_rows, total_billed):
   pdf.cell(22, 7, "Fee (CAD)", 1, 0, "R", True)
   pdf.cell(23, 7, "Notes", 1, 1, "L", True)
 
-  # Table Rows
   pdf.set_font("helvetica", "", 8)
   for r in invoice_rows:
     pdf.cell(22, 6, str(r["Date"]), 1, 0, "C")
@@ -174,6 +172,72 @@ def create_pdf_invoice(barn_name, invoice_rows, total_billed):
   pdf.ln(5)
   pdf.set_font("helvetica", "B", 12)
   pdf.cell(0, 8, f"Total Balance Due: ${total_billed:.2f} CAD", 0, 1, "R")
+
+  return pdf.output()
+
+
+def create_vet_report_pdf(horse_obj, vet_name, clinical_logs):
+  pdf = PDFInvoice()
+  pdf.add_page()
+
+  pdf.set_font("helvetica", "B", 14)
+  pdf.cell(0, 8, "CLINICAL THERAPY & REHABILITATION SUMMARY", 0, 1, "L")
+  pdf.set_font("helvetica", "", 10)
+  pdf.cell(
+      0, 5, f"Report Date: {datetime.date.today().strftime('%B %d, %Y')}", 0, 1
+  )
+  pdf.cell(0, 5, f"Attending Specialist: Paige Cummings (EquusOS Hub)", 0, 1)
+  pdf.ln(3)
+
+  pdf.set_fill_color(245, 245, 245)
+  pdf.rect(10, pdf.get_y(), 190, 22, "F")
+  pdf.set_xy(12, pdf.get_y() + 2)
+
+  pdf.set_font("helvetica", "B", 10)
+  pdf.cell(
+      90,
+      5,
+      f"Patient: {horse_obj.get('name', 'N/A')} (Owner:"
+      f" {horse_obj.get('owner_name', 'N/A')})",
+      0,
+      0,
+  )
+  pdf.cell(90, 5, f"Facility: {horse_obj.get('barn_details', {}).get('name', 'N/A')}", 0, 1)
+  pdf.set_xy(12, pdf.get_y())
+  pdf.set_font("helvetica", "", 9)
+  pdf.cell(90, 5, f"Primary Veterinarian: {vet_name if vet_name else 'On File'}", 0, 0)
+  total_mins = sum(int(l.get("duration_minutes", 0)) for l in clinical_logs)
+  pdf.cell(90, 5, f"Cumulative Therapy Logged: {total_mins} Minutes", 0, 1)
+  pdf.ln(8)
+
+  pdf.set_font("helvetica", "B", 11)
+  pdf.cell(0, 7, "Chronological Treatment History & Clinical Notes", 0, 1)
+
+  for log in clinical_logs:
+    pdf.set_draw_color(200, 200, 200)
+    pdf.set_font("helvetica", "B", 9)
+    date_str = str(log.get("created_at", ""))[:10]
+    modality_str = str(log.get("modality", "Therapy"))
+    mins_str = str(log.get("duration_minutes", "20"))
+    pdf.cell(0, 6, f"[{date_str}] - {modality_str} ({mins_str} mins)", "B", 1)
+
+    pdf.set_font("helvetica", "", 8)
+    notes_clean = str(
+        log.get("session_notes", "Routine complementary therapy administered.")
+    )
+    pdf.multi_cell(0, 5, f"Observations: {notes_clean}")
+    pdf.ln(2)
+
+  pdf.ln(4)
+  pdf.set_font("helvetica", "I", 8)
+  pdf.multi_cell(
+      0,
+      4,
+      "Disclaimer: Equus Performance Therapeutics provides complementary"
+      " non-invasive wellness, high-energy cellular bio-stimulation, and dry"
+      " salt halotherapy. This summary is intended to support collaborative"
+      " veterinary diagnosis and management.",
+  )
 
   return pdf.output()
 
@@ -192,6 +256,7 @@ page = st.sidebar.radio(
         "Client Health Portal",
         "Monthly Invoicing & Exports",
         "Payments & Accounts Receivable",
+        "Veterinary Clinical Reports",
     ],
 )
 
@@ -746,14 +811,12 @@ elif page == "Payments & Accounts Receivable":
       " account balances."
   )
 
-  # Fetch all treatment logs to compute total billed per owner
   try:
     all_logs_res = supabase.table("treatment_logs").select("*").execute()
     all_logs_data = all_logs_res.data if all_logs_res.data else []
   except Exception:
     all_logs_data = []
 
-  # Fetch all payments
   try:
     all_pmts_res = (
         supabase.table("client_payments")
@@ -777,7 +840,6 @@ elif page == "Payments & Accounts Receivable":
       )
   )
 
-  # Total Billed vs Total Paid summary metrics
   total_revenue_billed = sum(
       float(l.get("calculated_fee", 0)) for l in all_logs_data
   )
@@ -886,3 +948,90 @@ elif page == "Payments & Accounts Receivable":
         st.divider()
   else:
     st.write("No payments recorded yet.")
+
+# ----------------------------------------------------
+# Page 7: Veterinary Clinical Reports
+# ----------------------------------------------------
+elif page == "Veterinary Clinical Reports":
+  st.title("🩺 Veterinary Clinical Summary Reports")
+  st.markdown(
+      "Generate concise, professional clinical treatment summaries for"
+      " veterinarians and training teams."
+  )
+
+  if horses:
+    col_v1, col_v2 = st.columns([1, 2])
+
+    with col_v1:
+      horse_lookup = {
+          f"{h['name']} ({h['owner_name']} | {h['barn_details']['name']})": h
+          for h in horses
+      }
+      sel_label = st.selectbox(
+          "Select Horse for Clinical Report", list(horse_lookup.keys())
+      )
+      chosen_horse_obj = horse_lookup[sel_label]
+
+      # Query waivers to check for veterinarian on file
+      try:
+        w_res = (
+            supabase.table("client_waivers")
+            .select("primary_veterinarian, vet_phone")
+            .eq("horse_name", chosen_horse_obj.get("name"))
+            .execute()
+        )
+        vet_info = w_res.data[0] if w_res.data else {}
+      except Exception:
+        vet_info = {}
+
+      default_vet = vet_info.get("primary_veterinarian", "")
+      vet_contact_input = st.text_input(
+          "Primary Veterinarian",
+          value=default_vet if default_vet else "Attending Equine DVM",
+      )
+
+      # Fetch horse treatment logs
+      try:
+        h_logs_res = (
+            supabase.table("treatment_logs")
+            .select("*")
+            .eq("horse_id", str(chosen_horse_obj["id"]))
+            .order("created_at", desc=True)
+            .execute()
+        )
+        horse_logs = h_logs_res.data if h_logs_res.data else []
+      except Exception:
+        horse_logs = []
+
+    with col_v2:
+      st.subheader(f"Clinical Summary: {chosen_horse_obj['name']}")
+      st.markdown(
+          f"**Owner:** {chosen_horse_obj['owner_name']} | **Facility:**"
+          f" {chosen_horse_obj['barn_details']['name']}"
+      )
+
+      if horse_logs:
+        st.write(f"Total Recorded Sessions: **{len(horse_logs)}**")
+
+        for l in horse_logs[:3]:
+          st.caption(
+              f"• **{l.get('created_at', '')[:10]}** —"
+              f" `{l.get('modality')}` ({l.get('duration_minutes')} mins):"
+              f" {l.get('session_notes')}"
+          )
+
+        # Generate Clinical PDF
+        vet_pdf_bytes = create_vet_report_pdf(
+            chosen_horse_obj, vet_contact_input, horse_logs
+        )
+
+        st.download_button(
+            label="📄 Export Veterinary Clinical Report (PDF)",
+            data=bytes(vet_pdf_bytes),
+            file_name=f"EquusOS_Clinical_Report_{chosen_horse_obj['name'].replace(' ', '_')}_{datetime.date.today()}.pdf",
+            mime="application/pdf",
+        )
+      else:
+        st.info("No clinical sessions recorded for this horse yet.")
+  else:
+    st.info("Please register a horse profile first.")
