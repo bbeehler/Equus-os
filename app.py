@@ -1,8 +1,8 @@
 import datetime
 import io
 import urllib.parse
-import pandas as pd
 from fpdf import FPDF
+import pandas as pd
 import streamlit as st
 from supabase import Client, create_client
 
@@ -233,14 +233,7 @@ def create_facility_reconciliation_pdf(
       "R",
   )
   pdf.set_font("helvetica", "B", 12)
-  pdf.cell(
-      0,
-      7,
-      f"Net Facility Total Due: ${total_billed:.2f} CAD",
-      0,
-      1,
-      "R",
-  )
+  pdf.cell(0, 7, f"Net Facility Total Due: ${total_billed:.2f} CAD", 0, 1, "R")
 
   return pdf.output()
 
@@ -329,6 +322,7 @@ page = st.sidebar.radio(
     [
         "Operations & Treatment Feed",
         "Clinical Progression Tracker",
+        "Photo & Video Progress Gallery",
         "Pre-Paid Packages & Credits",
         "Facility Retainer Reconciler",
         "Smart Route Booking",
@@ -679,7 +673,140 @@ elif page == "Clinical Progression Tracker":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 3: Pre-Paid Packages & Credit Passes
+# Page 3: Photo & Video Clinical Progress Gallery (NEW MODULE)
+# ----------------------------------------------------
+elif page == "Photo & Video Progress Gallery":
+  st.title("📸 Equine Photo & Video Clinical Progress Gallery")
+  st.markdown(
+      "Document visual posture changes, topline development, and video gait"
+      " assessments over consecutive therapy cycles."
+  )
+
+  if horses:
+    col_g1, col_g2 = st.columns([1, 2])
+
+    with col_g1:
+      with st.form("add_media_form"):
+        st.subheader("Upload Media / Log Video")
+        horse_pick_gal = {f"{h['name']} ({h['owner_name']})": h for h in horses}
+        sel_h_gal = st.selectbox(
+            "Select Horse", list(horse_pick_gal.keys())
+        )
+        active_ghorse = horse_pick_gal[sel_h_gal]
+
+        m_date = st.date_input("Record Date", datetime.date.today())
+        m_stage = st.selectbox(
+            "Clinical Stage",
+            [
+                "Pre-Treatment Baseline (Before Session)",
+                "Immediate Post-Treatment Relaxation",
+                "Movement & Gait Analysis (Video)",
+                "Multi-Week Rehabilitation Follow-Up",
+            ],
+        )
+
+        m_type = st.radio("Media Upload Type", ["Direct Image Upload", "Video URL Link (YouTube / Vimeo / Cloud)"])
+
+        uploaded_img_file = None
+        video_link = ""
+
+        if m_type == "Direct Image Upload":
+          uploaded_img_file = st.file_uploader(
+              "Choose Image File (JPG / PNG)", type=["jpg", "jpeg", "png"]
+          )
+        else:
+          video_link = st.text_input("Paste Public Video Link", placeholder="https://youtu.be/...")
+
+        caption_txt = st.text_input("Caption / Stance Description", placeholder="e.g. Left Lateral Stance, Lumbar Softening")
+        notes_txt = st.text_area("Clinical Observations & Findings")
+
+        if st.form_submit_button("Save Clinical Media Record"):
+          if m_type == "Direct Image Upload" and uploaded_img_file is not None:
+            try:
+              # Upload to Supabase storage bucket
+              file_bytes = uploaded_img_file.read()
+              file_path = f"{active_ghorse['id']}_{int(datetime.datetime.now().timestamp())}_{uploaded_img_file.name}"
+              
+              upload_res = supabase.storage.from_("equus-media").upload(
+                  file_path, file_bytes, {"content-type": uploaded_img_file.type}
+              )
+              
+              # Get public URL
+              public_url = supabase.storage.from_("equus-media").get_public_url(file_path)
+
+              supabase.table("horse_media_records").insert({
+                  "record_date": str(m_date),
+                  "horse_id": str(active_ghorse["id"]),
+                  "stage_category": m_stage,
+                  "media_type": "Image",
+                  "media_url": public_url,
+                  "caption": caption_txt,
+                  "clinical_notes": notes_txt,
+              }).execute()
+
+              st.success(f"Uploaded and archived image for {active_ghorse['name']}!")
+              st.rerun()
+            except Exception as ex:
+              st.error(f"Error uploading image: {ex}")
+
+          elif m_type != "Direct Image Upload" and video_link:
+            try:
+              supabase.table("horse_media_records").insert({
+                  "record_date": str(m_date),
+                  "horse_id": str(active_ghorse["id"]),
+                  "stage_category": m_stage,
+                  "media_type": "Video Link",
+                  "media_url": video_link,
+                  "caption": caption_txt,
+                  "clinical_notes": notes_txt,
+              }).execute()
+
+              st.success(f"Archived video link for {active_ghorse['name']}!")
+              st.rerun()
+            except Exception as ex:
+              st.error(f"Error saving video record: {ex}")
+          else:
+            st.warning("Please provide an image file or video URL.")
+
+    with col_g2:
+      st.subheader(f"Visual Progress Feed: {active_ghorse['name']}")
+      
+      try:
+        media_res = (
+            supabase.table("horse_media_records")
+            .select("*")
+            .eq("horse_id", str(active_ghorse["id"]))
+            .order("record_date", desc=True)
+            .execute()
+        )
+        saved_media = media_res.data if media_res.data else []
+      except Exception:
+        saved_media = []
+
+      if saved_media:
+        for item in saved_media:
+          with st.container():
+            st.markdown(f"**{item.get('caption', 'Clinical Record')}** — `{item.get('stage_category')}`")
+            st.caption(f"📅 Date: **{item.get('record_date')}**")
+
+            if item.get("media_type") == "Image":
+              st.image(item.get("media_url"), use_container_width=True)
+            elif item.get("media_type") == "Video Link":
+              try:
+                st.video(item.get("media_url"))
+              except Exception:
+                st.markdown(f"🔗 [Open Video Link]({item.get('media_url')})")
+
+            if item.get("clinical_notes"):
+              st.info(f"**Clinical Notes:** {item.get('clinical_notes')}")
+            st.divider()
+      else:
+        st.info("No photos or gait videos archived for this horse yet.")
+  else:
+    st.info("Please register a horse profile first.")
+
+# ----------------------------------------------------
+# Page 4: Pre-Paid Packages & Credit Passes
 # ----------------------------------------------------
 elif page == "Pre-Paid Packages & Credits":
   st.title("🎟️ Pre-Paid Multi-Session Packages & Passes")
@@ -835,7 +962,7 @@ elif page == "Pre-Paid Packages & Credits":
     st.write("No packages registered yet.")
 
 # ----------------------------------------------------
-# Page 4: Facility Retainer & Intensive Reconciler (NEW MODULE 14)
+# Page 5: Facility Retainer & Intensive Reconciler
 # ----------------------------------------------------
 elif page == "Facility Retainer Reconciler":
   st.title("🏛️ Facility Retainer & Intensive Reconciliation")
@@ -852,11 +979,9 @@ elif page == "Facility Retainer Reconciler":
     )
     chosen_b = barn_pick[chosen_bname]
 
-    # Fetch facility horses
     f_horses = [h for h in horses if h.get("barn_id") == chosen_b["id"]]
     f_horse_ids = [h["id"] for h in f_horses]
 
-    # Fetch logs for this barn
     try:
       all_l_res = supabase.table("treatment_logs").select("*").execute()
       all_l = all_l_res.data if all_l_res.data else []
@@ -867,16 +992,14 @@ elif page == "Facility Retainer Reconciler":
     mktg_horses = [h for h in f_horses if h.get("is_marketing_tier", False)]
     std_horses = [h for h in f_horses if not h.get("is_marketing_tier", False)]
 
-    # Metrics
     tot_mins = sum(int(l.get("duration_minutes", 0)) for l in facility_l)
     tot_billed = sum(float(l.get("calculated_fee", 0)) for l in facility_l)
 
-    # Compute promo savings provided to barn
     waived_promo_mins = 0
     for mh in mktg_horses:
       used = int(mh.get("minutes_used_this_month", 0))
       waived_promo_mins += min(used, 200)
-    waived_promo_value = waived_promo_mins * 2.0  # Valued at $2.00/min standard
+    waived_promo_value = waived_promo_mins * 2.0
 
     c_b1, c_b2, c_b3, c_b4 = st.columns(4)
     c_b1.metric("Active Stabled Horses", len(f_horses))
@@ -900,7 +1023,6 @@ elif page == "Facility Retainer Reconciler":
 
       h_logs = [l for l in facility_l if l.get("horse_id") == h["id"]]
       h_billed = sum(float(l.get("calculated_fee", 0)) for l in h_logs)
-
       waived_for_h = (min(h_used, 200) * 2.0) if is_mktg else 0.0
 
       recon_rows.append({
@@ -915,7 +1037,6 @@ elif page == "Facility Retainer Reconciler":
     if recon_rows:
       st.dataframe(pd.DataFrame(recon_rows), use_container_width=True)
 
-      # 1-Click Master Facility PDF Generator
       facility_pdf_bytes = create_facility_reconciliation_pdf(
           chosen_b, recon_rows, tot_billed, waived_promo_value
       )
@@ -933,7 +1054,7 @@ elif page == "Facility Retainer Reconciler":
     st.info("No facilities registered.")
 
 # ----------------------------------------------------
-# Page 5: Smart Route Booking
+# Page 6: Smart Route Booking
 # ----------------------------------------------------
 elif page == "Smart Route Booking":
   st.title("Smart Route Corridor Dispatcher")
@@ -1038,7 +1159,7 @@ elif page == "Smart Route Booking":
     st.write("No appointments scheduled.")
 
 # ----------------------------------------------------
-# Page 6: Corridor Calendar & Daily Run-Sheet
+# Page 7: Corridor Calendar & Daily Run-Sheet
 # ----------------------------------------------------
 elif page == "Corridor Calendar & Run-Sheet":
   st.title("📅 Corridor Schedule & Daily Dispatch Run-Sheet")
@@ -1161,7 +1282,7 @@ elif page == "Corridor Calendar & Run-Sheet":
     st.dataframe(pd.DataFrame(outlook_rows), use_container_width=True)
 
 # ----------------------------------------------------
-# Page 7: Client Re-booking & Reminders
+# Page 8: Client Re-booking & Reminders
 # ----------------------------------------------------
 elif page == "Client Re-booking & Reminders":
   st.title("💬 Automated Client Reminders & Re-Booking Hub")
@@ -1284,7 +1405,7 @@ elif page == "Client Re-booking & Reminders":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 8: Client Intake & Waiver
+# Page 9: Client Intake & Waiver
 # ----------------------------------------------------
 elif page == "Client Intake & Waiver":
   st.title("Client Onboarding & Legal Liability Waiver")
@@ -1387,7 +1508,7 @@ elif page == "Client Intake & Waiver":
     st.write("No waivers on record yet.")
 
 # ----------------------------------------------------
-# Page 9: Client Health Portal
+# Page 10: Client Health Portal
 # ----------------------------------------------------
 elif page == "Client Health Portal":
   st.title("Client Health & Progress Portal")
@@ -1441,7 +1562,7 @@ elif page == "Client Health Portal":
     st.info("No horses registered in the database yet.")
 
 # ----------------------------------------------------
-# Page 10: Monthly Invoicing & Exports
+# Page 11: Monthly Invoicing & Exports
 # ----------------------------------------------------
 elif page == "Monthly Invoicing & Exports":
   st.title("Monthly Invoicing & Billing Summary")
@@ -1522,7 +1643,7 @@ elif page == "Monthly Invoicing & Exports":
     st.info("No barns registered in the database.")
 
 # ----------------------------------------------------
-# Page 11: Payments & Accounts Receivable
+# Page 12: Payments & Accounts Receivable
 # ----------------------------------------------------
 elif page == "Payments & Accounts Receivable":
   st.title("💳 Accounts Receivable & Payment Tracking")
@@ -1670,7 +1791,7 @@ elif page == "Payments & Accounts Receivable":
     st.write("No payments recorded yet.")
 
 # ----------------------------------------------------
-# Page 12: Veterinary Clinical Reports
+# Page 13: Veterinary Clinical Reports
 # ----------------------------------------------------
 elif page == "Veterinary Clinical Reports":
   st.title("🩺 Veterinary Clinical Summary Reports")
@@ -1754,7 +1875,7 @@ elif page == "Veterinary Clinical Reports":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 13: Corridor Travel & Expense Tracker
+# Page 14: Corridor Travel & Expense Tracker
 # ----------------------------------------------------
 elif page == "Corridor Travel & Expense Tracker":
   st.title("🚗 Corridor Travel & Operational Expense Tracker")
@@ -1905,7 +2026,7 @@ elif page == "Corridor Travel & Expense Tracker":
     st.write("No travel expenses recorded.")
 
 # ----------------------------------------------------
-# Page 14: Executive P&L Snapshot
+# Page 15: Executive P&L Snapshot
 # ----------------------------------------------------
 elif page == "Executive P&L Snapshot":
   st.title("📊 Executive P&L Financial Performance")
