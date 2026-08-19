@@ -93,7 +93,7 @@ def get_data_maps():
             "name": "No Barn",
             "is_flagship": False,
             "rate_per_minute": 2.0,
-            "address": "",
+            "address": "Local Mobile",
         },
     )
 
@@ -260,6 +260,7 @@ page = st.sidebar.radio(
     [
         "Operations & Treatment Feed",
         "Smart Route Booking",
+        "Corridor Calendar & Run-Sheet",
         "Client Intake & Waiver",
         "Client Health Portal",
         "Monthly Invoicing & Exports",
@@ -566,13 +567,137 @@ elif page == "Smart Route Booking":
       st.write(
           f"📅 **{a.get('appointment_date')}** |"
           f" **{h_obj.get('name', 'Horse')}** @ {b_name} | Travel Fee:"
-          f" `${float(a.get('travel_fee', 0)):.2f}` CAD"
+          f" `${float(a.get('travel_fee', 0)):.2f}` CAD | Status:"
+          f" `{a.get('status', 'Confirmed')}`"
       )
   else:
     st.write("No appointments scheduled.")
 
 # ----------------------------------------------------
-# Page 3: Client Intake & Waiver
+# Page 3: Corridor Calendar & Daily Run-Sheet (NEW MODULE)
+# ----------------------------------------------------
+elif page == "Corridor Calendar & Run-Sheet":
+  st.title("📅 Corridor Schedule & Daily Dispatch Run-Sheet")
+  st.markdown(
+      "Organize weekly corridor runs, track stop order, and generate daily"
+      " mobile dispatch sheets."
+  )
+
+  try:
+    appts_res = (
+        supabase.table("appointments")
+        .select("*")
+        .order("appointment_date")
+        .execute()
+    )
+    all_appts = appts_res.data if appts_res.data else []
+  except Exception:
+    all_appts = []
+
+  horse_map = {h["id"]: h for h in horses}
+
+  col_d1, col_d2 = st.columns([1, 2])
+
+  with col_d1:
+    st.subheader("Select Run-Sheet Date")
+    selected_run_date = st.date_input(
+        "Dispatch Date", datetime.date.today(), key="run_date_picker"
+    )
+
+    day_of_week = selected_run_date.strftime("%A")
+    corridor_match = {
+        "Monday": "Ottawa Metro & Russell Home Corridor",
+        "Tuesday": "Kingston Corridor (South - Hwy 416/401)",
+        "Wednesday": "Pembroke & Upper Valley Corridor (North - Hwy 17)",
+        "Thursday": "Montreal Corridor (East - Hwy 417)",
+        "Friday": "Flagship Barn Dedicated Intensive",
+    }.get(day_of_week, "Custom / Weekend Route")
+
+    st.info(f"📍 **Scheduled Corridor:** {corridor_match}")
+
+  with col_d2:
+    daily_appts = [
+        a for a in all_appts if a.get("appointment_date") == str(selected_run_date)
+    ]
+
+    st.subheader(
+        f"Daily Stop Itinerary: {selected_run_date.strftime('%b %d, %Y')} ({len(daily_appts)} Stops)"
+    )
+
+    if daily_appts:
+      for idx, appt in enumerate(daily_appts, start=1):
+        h_info = horse_map.get(appt.get("horse_id"), {})
+        b_info = h_info.get("barn_details", {})
+        with st.container():
+          c_s1, c_s2 = st.columns([3, 1])
+          with c_s1:
+            st.markdown(
+                f"**Stop {idx}: {h_info.get('name', 'Horse')}** (Owner:"
+                f" {h_info.get('owner_name', 'N/A')})"
+            )
+            st.caption(
+                f"📍 Facility: **{b_info.get('name', 'Barn')}** | Distance:"
+                f" {appt.get('distance_from_base_km', 0)} km | Fee:"
+                f" ${float(appt.get('travel_fee', 0)):.2f}"
+            )
+          with c_s2:
+            new_status = st.selectbox(
+                "Status",
+                ["Confirmed", "En Route", "Completed", "Rescheduled"],
+                index=["Confirmed", "En Route", "Completed", "Rescheduled"].index(
+                    appt.get("status", "Confirmed")
+                ),
+                key=f"status_select_{appt['id']}",
+            )
+            if new_status != appt.get("status"):
+              supabase.table("appointments").update(
+                  {"status": new_status}
+              ).eq("id", appt["id"]).execute()
+              st.rerun()
+          st.divider()
+
+      run_sheet_df = pd.DataFrame([
+          {
+              "Stop": i + 1,
+              "Horse": horse_map.get(a.get("horse_id"), {}).get("name", ""),
+              "Owner": horse_map.get(a.get("horse_id"), {}).get("owner_name", ""),
+              "Barn / Facility": horse_map.get(a.get("horse_id"), {})
+              .get("barn_details", {})
+              .get("name", ""),
+              "Distance (km)": a.get("distance_from_base_km", 0),
+              "Travel Fee": f"${float(a.get('travel_fee', 0)):.2f}",
+              "Status": a.get("status", "Confirmed"),
+          }
+          for i, a in enumerate(daily_appts)
+      ])
+
+      csv_sheet = run_sheet_df.to_csv(index=False).encode("utf-8")
+      st.download_button(
+          label="📥 Export Daily Dispatch Run-Sheet (CSV)",
+          data=csv_sheet,
+          file_name=f"EquusOS_RunSheet_{selected_run_date}.csv",
+          mime="text/csv",
+      )
+    else:
+      st.info(f"No appointments booked for {selected_run_date.strftime('%A, %B %d, %Y')}.")
+
+  st.subheader("Upcoming 14-Day Dispatch Outlook")
+  if all_appts:
+    outlook_rows = []
+    for a in all_appts:
+      h_obj = horse_map.get(a.get("horse_id"), {})
+      outlook_rows.append({
+          "Date": a.get("appointment_date"),
+          "Horse": h_obj.get("name", "N/A"),
+          "Owner": h_obj.get("owner_name", "N/A"),
+          "Barn": h_obj.get("barn_details", {}).get("name", "N/A"),
+          "Travel Fee": f"${float(a.get('travel_fee', 0)):.2f}",
+          "Status": a.get("status", "Confirmed"),
+      })
+    st.dataframe(pd.DataFrame(outlook_rows), use_container_width=True)
+
+# ----------------------------------------------------
+# Page 4: Client Intake & Waiver
 # ----------------------------------------------------
 elif page == "Client Intake & Waiver":
   st.title("Client Onboarding & Legal Liability Waiver")
@@ -675,7 +800,7 @@ elif page == "Client Intake & Waiver":
     st.write("No waivers on record yet.")
 
 # ----------------------------------------------------
-# Page 4: Client Health Portal
+# Page 5: Client Health Portal
 # ----------------------------------------------------
 elif page == "Client Health Portal":
   st.title("Client Health & Progress Portal")
@@ -729,7 +854,7 @@ elif page == "Client Health Portal":
     st.info("No horses registered in the database yet.")
 
 # ----------------------------------------------------
-# Page 5: Monthly Invoicing & Exports
+# Page 6: Monthly Invoicing & Exports
 # ----------------------------------------------------
 elif page == "Monthly Invoicing & Exports":
   st.title("Monthly Invoicing & Billing Summary")
@@ -810,7 +935,7 @@ elif page == "Monthly Invoicing & Exports":
     st.info("No barns registered in the database.")
 
 # ----------------------------------------------------
-# Page 6: Payments & Accounts Receivable
+# Page 7: Payments & Accounts Receivable
 # ----------------------------------------------------
 elif page == "Payments & Accounts Receivable":
   st.title("💳 Accounts Receivable & Payment Tracking")
@@ -958,7 +1083,7 @@ elif page == "Payments & Accounts Receivable":
     st.write("No payments recorded yet.")
 
 # ----------------------------------------------------
-# Page 7: Veterinary Clinical Reports
+# Page 8: Veterinary Clinical Reports
 # ----------------------------------------------------
 elif page == "Veterinary Clinical Reports":
   st.title("🩺 Veterinary Clinical Summary Reports")
@@ -1042,7 +1167,7 @@ elif page == "Veterinary Clinical Reports":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 8: Corridor Travel & Expense Tracker
+# Page 9: Corridor Travel & Expense Tracker
 # ----------------------------------------------------
 elif page == "Corridor Travel & Expense Tracker":
   st.title("🚗 Corridor Travel & Operational Expense Tracker")
@@ -1051,7 +1176,6 @@ elif page == "Corridor Travel & Expense Tracker":
       " profitability across regional corridors."
   )
 
-  # Fetch all expenses
   try:
     exp_res = (
         supabase.table("corridor_expenses")
@@ -1063,7 +1187,6 @@ elif page == "Corridor Travel & Expense Tracker":
   except Exception:
     all_expenses = []
 
-  # Fetch appointment travel fees collected
   try:
     appts_res = supabase.table("appointments").select("travel_fee").execute()
     all_appts = appts_res.data if appts_res.data else []
