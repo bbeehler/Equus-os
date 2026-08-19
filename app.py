@@ -31,16 +31,19 @@ def calculate_session_fee(
 ):
   new_total = previous_minutes + duration_minutes
 
+  # Non-flagship barns: $2.00/min or $60 for standard 20-min session
   if not is_flagship:
     fee = 60.0 if duration_minutes == 20 else duration_minutes * 2.0
     return fee, new_total, "Standard Mobile Rate ($2.00/min)"
 
+  # Flagship Marketing Tier (3 Promo Horses): First 200 mins free, then $1.00/min
   if is_marketing_tier:
     if new_total <= 200:
       return 0.0, new_total, "Promo Allowance (100% Free)"
     billable = duration_minutes if previous_minutes >= 200 else (new_total - 200)
     return float(billable * 1.0), new_total, "Marketing Tier Overage ($1.00/min)"
 
+  # Flagship Standard Tier (9 Horses): Baseline <= 200 mins @ $1.00/min, overage @ $2.00/min
   if previous_minutes >= 200:
     return (
         float(duration_minutes * 2.0),
@@ -71,12 +74,19 @@ def calculate_travel_fee(distance_km: float, same_day_horses: int):
 
 
 def get_data_maps():
-  barns_res = supabase.table("barns").select("*").execute()
-  barns = barns_res.data if barns_res.data else []
+  try:
+    barns_res = supabase.table("barns").select("*").execute()
+    barns = barns_res.data if barns_res.data else []
+  except Exception:
+    barns = []
   barn_map = {b["id"]: b for b in barns}
 
-  horses_res = supabase.table("horses").select("*").execute()
-  horses = horses_res.data if horses_res.data else []
+  try:
+    horses_res = supabase.table("horses").select("*").execute()
+    horses = horses_res.data if horses_res.data else []
+  except Exception:
+    horses = []
+
   for h in horses:
     h["barn_details"] = barn_map.get(
         h.get("barn_id"),
@@ -136,15 +146,18 @@ if page == "Operations & Treatment Feed":
 
         if st.form_submit_button("Save Horse Profile"):
           if h_name and o_name and b_selected:
-            supabase.table("horses").insert({
-                "name": h_name,
-                "owner_name": o_name,
-                "barn_id": barn_opts[b_selected],
-                "is_marketing_tier": is_mktg,
-                "minutes_used_this_month": 0,
-            }).execute()
-            st.success(f"Registered {h_name}!")
-            st.rerun()
+            try:
+              supabase.table("horses").insert({
+                  "name": h_name,
+                  "owner_name": o_name,
+                  "barn_id": barn_opts[b_selected],
+                  "is_marketing_tier": is_mktg,
+                  "minutes_used_this_month": 0,
+              }).execute()
+              st.success(f"Registered {h_name}!")
+              st.rerun()
+            except Exception as e:
+              st.error(f"Error registering horse: {e}")
 
   with col2:
     with st.expander("📝 Log Therapeutic Session", expanded=True):
@@ -174,40 +187,50 @@ if page == "Operations & Treatment Feed":
           notes = st.text_area("Clinical Observations & Findings")
 
           if st.form_submit_button("Record Session & Compute Fee"):
-            is_flagship = h_obj.get("barn_details", {}).get(
-                "is_flagship", False
-            )
-            fee, updated_mins, note = calculate_session_fee(
-                int(duration),
-                is_flagship,
-                h_obj.get("is_marketing_tier", False),
-                h_obj.get("minutes_used_this_month", 0),
-            )
+            try:
+              is_flagship = h_obj.get("barn_details", {}).get(
+                  "is_flagship", False
+              )
+              fee, updated_mins, note = calculate_session_fee(
+                  int(duration),
+                  is_flagship,
+                  h_obj.get("is_marketing_tier", False),
+                  h_obj.get("minutes_used_this_month", 0),
+              )
 
-            supabase.table("treatment_logs").insert({
-                "horse_id": h_obj["id"],
-                "modality": modality,
-                "duration_minutes": int(duration),
-                "calculated_fee": float(fee),
-                "session_notes": f"{notes} [Billing: {note}]",
-            }).execute()
+              supabase.table("treatment_logs").insert({
+                  "horse_id": str(h_obj["id"]),
+                  "modality": str(modality),
+                  "duration_minutes": int(duration),
+                  "calculated_fee": float(fee),
+                  "session_notes": f"{notes} [Billing: {note}]",
+              }).execute()
 
-            supabase.table("horses").update(
-                {"minutes_used_this_month": updated_mins}
-            ).eq("id", h_obj["id"]).execute()
-            st.success(f"Session Logged! Calculated Fee: ${fee:.2f} CAD ({note})")
-            st.rerun()
+              supabase.table("horses").update(
+                  {"minutes_used_this_month": int(updated_mins)}
+              ).eq("id", str(h_obj["id"])).execute()
+
+              st.success(
+                  f"Session Logged! Calculated Fee: ${fee:.2f} CAD ({note})"
+              )
+              st.rerun()
+            except Exception as e:
+              st.error(f"Error logging session: {e}")
       else:
         st.info("Please register a horse first.")
 
   st.subheader("Live Clinical Treatment Feed")
-  logs_res = (
-      supabase.table("treatment_logs")
-      .select("*")
-      .order("created_at", desc=True)
-      .execute()
-  )
-  logs = logs_res.data if logs_res.data else []
+  try:
+    logs_res = (
+        supabase.table("treatment_logs")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    logs = logs_res.data if logs_res.data else []
+  except Exception:
+    logs = []
+
   horse_map = {h["id"]: h for h in horses}
 
   if logs:
@@ -272,7 +295,7 @@ elif page == "Smart Route Booking":
                 .eq("appointment_date", str(app_date))
             )
             if barn_id_val:
-              query = query.eq("barn_id", barn_id_val)
+              query = query.eq("barn_id", str(barn_id_val))
 
             appts_res = query.execute()
             same_day_count = (len(appts_res.data) if appts_res.data else 0) + 1
@@ -281,6 +304,7 @@ elif page == "Smart Route Booking":
                 float(distance), same_day_count
             )
 
+            # Insert with clean types
             payload = {
                 "appointment_date": str(app_date),
                 "horse_id": str(chosen_horse["id"]),
@@ -299,7 +323,7 @@ elif page == "Smart Route Booking":
             )
             st.rerun()
           except Exception as err:
-            st.error(f"Database Insert Error: {err}")
+            st.error(f"Booking Error: {err}")
 
   with col2:
     st.subheader("Designated Corridor Days")
@@ -320,22 +344,23 @@ elif page == "Smart Route Booking":
         .execute()
     )
     appts = appts_res.data if appts_res.data else []
-    horse_map = {h["id"]: h for h in horses}
+  except Exception:
+    appts = []
 
-    if appts:
-      for a in appts:
-        h_obj = horse_map.get(a.get("horse_id"), {})
-        b_name = h_obj.get("barn_details", {}).get("name", "Barn")
-        st.write(
-            f"📅 **{a.get('appointment_date')}** |"
-            f" **{h_obj.get('name', 'Horse')}** @ {b_name} | Travel Fee:"
-            f" `${float(a.get('travel_fee', 0)):.2f}` CAD"
-        )
-    else:
-      st.write("No appointments scheduled.")
-  except Exception as e:
-    st.error(f"Could not load scheduled appointments: {e}")
-    
+  horse_map = {h["id"]: h for h in horses}
+
+  if appts:
+    for a in appts:
+      h_obj = horse_map.get(a.get("horse_id"), {})
+      b_name = h_obj.get("barn_details", {}).get("name", "Barn")
+      st.write(
+          f"📅 **{a.get('appointment_date')}** |"
+          f" **{h_obj.get('name', 'Horse')}** @ {b_name} | Travel Fee:"
+          f" `${float(a.get('travel_fee', 0)):.2f}` CAD"
+      )
+  else:
+    st.write("No appointments scheduled.")
+
 # ----------------------------------------------------
 # Page 3: Client Health Portal
 # ----------------------------------------------------
@@ -366,14 +391,17 @@ elif page == "Client Health Portal":
     )
 
     st.subheader(f"Treatment History: {active_horse['name']}")
-    logs_res = (
-        supabase.table("treatment_logs")
-        .select("*")
-        .eq("horse_id", active_horse["id"])
-        .order("created_at", desc=True)
-        .execute()
-    )
-    logs = logs_res.data if logs_res.data else []
+    try:
+      logs_res = (
+          supabase.table("treatment_logs")
+          .select("*")
+          .eq("horse_id", str(active_horse["id"]))
+          .order("created_at", desc=True)
+          .execute()
+      )
+      logs = logs_res.data if logs_res.data else []
+    except Exception:
+      logs = []
 
     if logs:
       for log in logs:
@@ -405,17 +433,20 @@ elif page == "Monthly Invoicing & Exports":
     facility_horses = [h for h in horses if h.get("barn_id") == chosen_barn_id]
     facility_horse_ids = [h["id"] for h in facility_horses]
 
-    logs_res = (
-        supabase.table("treatment_logs")
-        .select("*")
-        .order("created_at", desc=True)
-        .execute()
-    )
-    all_logs = logs_res.data if logs_res.data else []
+    try:
+      logs_res = (
+          supabase.table("treatment_logs")
+          .select("*")
+          .order("created_at", desc=True)
+          .execute()
+      )
+      all_logs = logs_res.data if logs_res.data else []
+    except Exception:
+      all_logs = []
+
     facility_logs = [
         l for l in all_logs if l.get("horse_id") in facility_horse_ids
     ]
-
     horse_dict = {h["id"]: h for h in facility_horses}
 
     if facility_logs:
