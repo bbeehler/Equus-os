@@ -261,6 +261,7 @@ page = st.sidebar.radio(
     [
         "Operations & Treatment Feed",
         "Clinical Progression Tracker",
+        "Pre-Paid Packages & Credits",
         "Smart Route Booking",
         "Corridor Calendar & Run-Sheet",
         "Client Re-booking & Reminders",
@@ -609,7 +610,163 @@ elif page == "Clinical Progression Tracker":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 3: Smart Route Booking
+# Page 3: Pre-Paid Packages & Credit Passes (NEW MODULE 13)
+# ----------------------------------------------------
+elif page == "Pre-Paid Packages & Credits":
+  st.title("🎟️ Pre-Paid Multi-Session Packages & Passes")
+  st.markdown(
+      "Manage pre-paid treatment bundles, track punch-card credit balances, and"
+      " redeem session credits."
+  )
+
+  try:
+    pkg_res = (
+        supabase.table("client_packages")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    all_packages = pkg_res.data if pkg_res.data else []
+  except Exception:
+    all_packages = []
+
+  horse_map = {h["id"]: h for h in horses}
+
+  col_pk1, col_pk2 = st.columns([1, 1])
+
+  with col_pk1:
+    with st.expander("➕ Enroll Client in Multi-Session Package", expanded=True):
+      if horses:
+        with st.form("new_package_form"):
+          horse_picker_pkg = {
+              f"{h['name']} ({h['owner_name']})": h for h in horses
+          }
+          chosen_hpkg = st.selectbox(
+              "Select Horse", list(horse_picker_pkg.keys())
+          )
+          target_h = horse_picker_pkg[chosen_hpkg]
+
+          pkg_type = st.selectbox(
+              "Package Tier",
+              [
+                  "5-Session Equitron Rehab Pack ($275 CAD)",
+                  "10-Session Performance Maintenance Pack ($520 CAD)",
+                  "5-Session HaloEQ2 Pulmonary Reset ($225 CAD)",
+                  "3-Session Acute Injury Intensive ($165 CAD)",
+                  "Custom Multi-Session Credit Pass",
+              ],
+          )
+
+          default_credits = 5
+          default_price = 275.0
+          if "10-Session" in pkg_type:
+            default_credits = 10
+            default_price = 520.0
+          elif "HaloEQ2" in pkg_type:
+            default_credits = 5
+            default_price = 225.0
+          elif "3-Session" in pkg_type:
+            default_credits = 3
+            default_price = 165.0
+
+          c_credits = st.number_input(
+              "Total Credits in Pass",
+              min_value=1,
+              max_value=50,
+              value=default_credits,
+          )
+          c_price = st.number_input(
+              "Package Price (CAD)",
+              min_value=0.0,
+              step=25.0,
+              value=default_price,
+          )
+          p_status = st.selectbox(
+              "Payment Status", ["Paid via e-Transfer", "Pending Payment"]
+          )
+          pkg_notes = st.text_area("Pass Notes / Terms")
+
+          if st.form_submit_button("Create Pre-Paid Package"):
+            try:
+              supabase.table("client_packages").insert({
+                  "owner_name": target_h.get("owner_name", "Unknown"),
+                  "horse_id": str(target_h["id"]),
+                  "package_name": pkg_type,
+                  "total_credits": int(c_credits),
+                  "remaining_credits": int(c_credits),
+                  "package_price": float(c_price),
+                  "payment_status": p_status,
+                  "notes": pkg_notes,
+              }).execute()
+              st.success(
+                  f"Package created for {target_h['name']} with {c_credits}"
+                  " pre-paid credits!"
+              )
+              st.rerun()
+            except Exception as e:
+              st.error(f"Error creating package: {e}")
+      else:
+        st.info("Please register a horse profile first.")
+
+  with col_pk2:
+    with st.expander("⚡ 1-Click Credit Redemption", expanded=True):
+      active_packages = [
+          p for p in all_packages if int(p.get("remaining_credits", 0)) > 0
+      ]
+      if active_packages:
+        pkg_options = {
+            f"{p.get('package_name')} - {horse_map.get(p.get('horse_id'), {}).get('name', 'Horse')} ({p.get('remaining_credits')}/{p.get('total_credits')} Credits Left)": p
+            for p in active_packages
+        }
+        sel_pkg_label = st.selectbox(
+            "Select Active Package to Redeem", list(pkg_options.keys())
+        )
+        chosen_pkg = pkg_options[sel_pkg_label]
+
+        st.info(
+            f"**Owner:** {chosen_pkg.get('owner_name')} | **Remaining:**"
+            f" {chosen_pkg.get('remaining_credits')} /"
+            f" {chosen_pkg.get('total_credits')} Sessions"
+        )
+
+        if st.button("✅ Redeem 1 Pre-Paid Session Credit"):
+          new_balance = int(chosen_pkg.get("remaining_credits", 1)) - 1
+          try:
+            supabase.table("client_packages").update(
+                {"remaining_credits": new_balance}
+            ).eq("id", chosen_pkg["id"]).execute()
+            st.success(
+                f"Redeemed 1 session credit! New balance: {new_balance} credits"
+                " remaining."
+            )
+            st.rerun()
+          except Exception as ex:
+            st.error(f"Error redeeming credit: {ex}")
+      else:
+        st.write("No active pre-paid packages with remaining credits.")
+
+  st.subheader("Active Client Packages & Punch-Card Overview")
+  if all_packages:
+    pkg_table_rows = []
+    for p in all_packages:
+      h_obj = horse_map.get(p.get("horse_id"), {})
+      rem = int(p.get("remaining_credits", 0))
+      tot = int(p.get("total_credits", 1))
+      pkg_table_rows.append({
+          "Horse": h_obj.get("name", "N/A"),
+          "Owner": p.get("owner_name", "N/A"),
+          "Package Tier": p.get("package_name"),
+          "Credits Left": f"{rem} / {tot}",
+          "Price": f"${float(p.get('package_price', 0)):.2f}",
+          "Status": "🟢 Active" if rem > 0 else "⚪ Completed",
+          "Payment": p.get("payment_status", "Paid"),
+      })
+    st.dataframe(pd.DataFrame(pkg_table_rows), use_container_width=True)
+  else:
+    st.write("No packages registered yet.")
+
+# ----------------------------------------------------
+# Page 4: Smart Route Booking
 # ----------------------------------------------------
 elif page == "Smart Route Booking":
   st.title("Smart Route Corridor Dispatcher")
@@ -714,7 +871,7 @@ elif page == "Smart Route Booking":
     st.write("No appointments scheduled.")
 
 # ----------------------------------------------------
-# Page 4: Corridor Calendar & Daily Run-Sheet
+# Page 5: Corridor Calendar & Daily Run-Sheet
 # ----------------------------------------------------
 elif page == "Corridor Calendar & Run-Sheet":
   st.title("📅 Corridor Schedule & Daily Dispatch Run-Sheet")
@@ -837,7 +994,7 @@ elif page == "Corridor Calendar & Run-Sheet":
     st.dataframe(pd.DataFrame(outlook_rows), use_container_width=True)
 
 # ----------------------------------------------------
-# Page 5: Client Re-booking & Reminders
+# Page 6: Client Re-booking & Reminders
 # ----------------------------------------------------
 elif page == "Client Re-booking & Reminders":
   st.title("💬 Automated Client Reminders & Re-Booking Hub")
@@ -960,7 +1117,7 @@ elif page == "Client Re-booking & Reminders":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 6: Client Intake & Waiver
+# Page 7: Client Intake & Waiver
 # ----------------------------------------------------
 elif page == "Client Intake & Waiver":
   st.title("Client Onboarding & Legal Liability Waiver")
@@ -1063,7 +1220,7 @@ elif page == "Client Intake & Waiver":
     st.write("No waivers on record yet.")
 
 # ----------------------------------------------------
-# Page 7: Client Health Portal
+# Page 8: Client Health Portal
 # ----------------------------------------------------
 elif page == "Client Health Portal":
   st.title("Client Health & Progress Portal")
@@ -1117,7 +1274,7 @@ elif page == "Client Health Portal":
     st.info("No horses registered in the database yet.")
 
 # ----------------------------------------------------
-# Page 8: Monthly Invoicing & Exports
+# Page 9: Monthly Invoicing & Exports
 # ----------------------------------------------------
 elif page == "Monthly Invoicing & Exports":
   st.title("Monthly Invoicing & Billing Summary")
@@ -1198,7 +1355,7 @@ elif page == "Monthly Invoicing & Exports":
     st.info("No barns registered in the database.")
 
 # ----------------------------------------------------
-# Page 9: Payments & Accounts Receivable
+# Page 10: Payments & Accounts Receivable
 # ----------------------------------------------------
 elif page == "Payments & Accounts Receivable":
   st.title("💳 Accounts Receivable & Payment Tracking")
@@ -1346,7 +1503,7 @@ elif page == "Payments & Accounts Receivable":
     st.write("No payments recorded yet.")
 
 # ----------------------------------------------------
-# Page 10: Veterinary Clinical Reports
+# Page 11: Veterinary Clinical Reports
 # ----------------------------------------------------
 elif page == "Veterinary Clinical Reports":
   st.title("🩺 Veterinary Clinical Summary Reports")
@@ -1430,7 +1587,7 @@ elif page == "Veterinary Clinical Reports":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 11: Corridor Travel & Expense Tracker
+# Page 12: Corridor Travel & Expense Tracker
 # ----------------------------------------------------
 elif page == "Corridor Travel & Expense Tracker":
   st.title("🚗 Corridor Travel & Operational Expense Tracker")
@@ -1581,7 +1738,7 @@ elif page == "Corridor Travel & Expense Tracker":
     st.write("No travel expenses recorded.")
 
 # ----------------------------------------------------
-# Page 12: Executive P&L Snapshot (NEW MODULE 12)
+# Page 13: Executive P&L Snapshot
 # ----------------------------------------------------
 elif page == "Executive P&L Snapshot":
   st.title("📊 Executive P&L Financial Performance")
@@ -1591,33 +1748,28 @@ elif page == "Executive P&L Snapshot":
       " reserves."
   )
 
-  # Fetch all treatment logs
   try:
     logs_res = supabase.table("treatment_logs").select("*").execute()
     all_logs = logs_res.data if logs_res.data else []
   except Exception:
     all_logs = []
 
-  # Fetch all travel fees
   try:
     appts_res = supabase.table("appointments").select("*").execute()
     all_appts = appts_res.data if appts_res.data else []
   except Exception:
     all_appts = []
 
-  # Fetch all expenses
   try:
     exp_res = supabase.table("corridor_expenses").select("*").execute()
     all_expenses = exp_res.data if exp_res.data else []
   except Exception:
     all_expenses = []
 
-  # Financial Calculations
   gross_session_rev = sum(float(l.get("calculated_fee", 0)) for l in all_logs)
   gross_travel_rev = sum(float(a.get("travel_fee", 0)) for a in all_appts)
   total_gross_rev = gross_session_rev + gross_travel_rev
 
-  # Total Equitron minutes logged for Sinking Fund Reserve ($0.12/min)
   equitron_mins = sum(
       int(l.get("duration_minutes", 0))
       for l in all_logs
