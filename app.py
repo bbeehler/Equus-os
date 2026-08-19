@@ -107,9 +107,7 @@ class PDFInvoice(FPDF):
 
   def header(self):
     self.set_font("helvetica", "B", 16)
-    self.cell(
-        0, 8, "EQUUS PERFORMANCE THERAPEUTICS", 0, 1, "L"
-    )
+    self.cell(0, 8, "EQUUS PERFORMANCE THERAPEUTICS", 0, 1, "L")
     self.set_font("helvetica", "", 10)
     self.cell(
         0,
@@ -142,14 +140,7 @@ def create_pdf_invoice(barn_name, invoice_rows, total_billed):
   pdf = PDFInvoice()
   pdf.add_page()
   pdf.set_font("helvetica", "B", 14)
-  pdf.cell(
-      0,
-      8,
-      f"STATEMENT OF ACCOUNT: {barn_name.upper()}",
-      0,
-      1,
-      "L",
-  )
+  pdf.cell(0, 8, f"STATEMENT OF ACCOUNT: {barn_name.upper()}", 0, 1, "L")
 
   pdf.set_font("helvetica", "", 10)
   pdf.cell(
@@ -182,14 +173,7 @@ def create_pdf_invoice(barn_name, invoice_rows, total_billed):
 
   pdf.ln(5)
   pdf.set_font("helvetica", "B", 12)
-  pdf.cell(
-      0,
-      8,
-      f"Total Balance Due: ${total_billed:.2f} CAD",
-      0,
-      1,
-      "R",
-  )
+  pdf.cell(0, 8, f"Total Balance Due: ${total_billed:.2f} CAD", 0, 1, "R")
 
   return pdf.output()
 
@@ -207,6 +191,7 @@ page = st.sidebar.radio(
         "Client Intake & Waiver",
         "Client Health Portal",
         "Monthly Invoicing & Exports",
+        "Payments & Accounts Receivable",
     ],
 )
 
@@ -682,7 +667,9 @@ elif page == "Monthly Invoicing & Exports":
 
   if barns:
     barn_opts = {b["name"]: b["id"] for b in barns}
-    chosen_barn_name = st.selectbox("Select Barn / Facility", list(barn_opts.keys()))
+    chosen_barn_name = st.selectbox(
+        "Select Barn / Facility", list(barn_opts.keys())
+    )
     chosen_barn_id = barn_opts[chosen_barn_name]
 
     facility_horses = [h for h in horses if h.get("barn_id") == chosen_barn_id]
@@ -734,7 +721,6 @@ elif page == "Monthly Invoicing & Exports":
 
       st.dataframe(df_invoice, use_container_width=True)
 
-      # Generate PDF bytes
       pdf_output = create_pdf_invoice(
           chosen_barn_name, invoice_rows, total_billed
       )
@@ -749,3 +735,154 @@ elif page == "Monthly Invoicing & Exports":
       st.info(f"No treatment sessions on record for {chosen_barn_name}.")
   else:
     st.info("No barns registered in the database.")
+
+# ----------------------------------------------------
+# Page 6: Payments & Accounts Receivable
+# ----------------------------------------------------
+elif page == "Payments & Accounts Receivable":
+  st.title("💳 Accounts Receivable & Payment Tracking")
+  st.markdown(
+      "Record received payments from horse owners and monitor outstanding"
+      " account balances."
+  )
+
+  # Fetch all treatment logs to compute total billed per owner
+  try:
+    all_logs_res = supabase.table("treatment_logs").select("*").execute()
+    all_logs_data = all_logs_res.data if all_logs_res.data else []
+  except Exception:
+    all_logs_data = []
+
+  # Fetch all payments
+  try:
+    all_pmts_res = (
+        supabase.table("client_payments")
+        .select("*")
+        .order("payment_date", desc=True)
+        .execute()
+    )
+    all_pmts_data = all_pmts_res.data if all_pmts_res.data else []
+  except Exception:
+    all_pmts_data = []
+
+  horse_id_to_owner = {
+      h["id"]: h.get("owner_name", "Unknown") for h in horses
+  }
+  all_owners = sorted(
+      list(
+          set(
+              [h.get("owner_name") for h in horses if h.get("owner_name")]
+              + [p.get("owner_name") for p in all_pmts_data]
+          )
+      )
+  )
+
+  # Total Billed vs Total Paid summary metrics
+  total_revenue_billed = sum(
+      float(l.get("calculated_fee", 0)) for l in all_logs_data
+  )
+  total_revenue_received = sum(
+      float(p.get("amount_paid", 0)) for p in all_pmts_data
+  )
+  total_outstanding_ar = total_revenue_billed - total_revenue_received
+
+  m1, m2, m3 = st.columns(3)
+  m1.metric("Total Billed to Date", f"${total_revenue_billed:,.2f} CAD")
+  m2.metric("Total Payments Collected", f"${total_revenue_received:,.2f} CAD")
+  m3.metric(
+      "Outstanding A/R Balance",
+      f"${total_outstanding_ar:,.2f} CAD",
+      delta=f"-${total_outstanding_ar:,.2f}"
+      if total_outstanding_ar > 0
+      else "Paid in Full",
+      delta_color="inverse",
+  )
+
+  col_pay1, col_pay2 = st.columns(2)
+
+  with col_pay1:
+    with st.expander("💵 Record Client Payment", expanded=True):
+      with st.form("record_payment_form"):
+        p_owner = st.selectbox(
+            "Select Owner / Client",
+            all_owners
+            if all_owners
+            else ["Please register a horse/owner first"],
+        )
+        p_date = st.date_input("Payment Date", datetime.date.today())
+        p_amount = st.number_input(
+            "Amount Paid (CAD)", min_value=0.0, step=10.0, value=60.0
+        )
+        p_method = st.selectbox(
+            "Payment Method", ["e-Transfer", "Cheque", "Credit Card", "Cash"]
+        )
+        p_ref = st.text_input("Reference / Confirmation # (Optional)")
+        p_notes = st.text_area("Notes / Invoice Applied To")
+
+        if st.form_submit_button("Save Payment Record"):
+          if p_owner and p_amount > 0:
+            try:
+              supabase.table("client_payments").insert({
+                  "payment_date": str(p_date),
+                  "owner_name": p_owner,
+                  "amount_paid": float(p_amount),
+                  "payment_method": p_method,
+                  "reference_number": p_ref,
+                  "notes": p_notes,
+              }).execute()
+              st.success(f"Recorded ${p_amount:.2f} payment from {p_owner}!")
+              st.rerun()
+            except Exception as e:
+              st.error(f"Error saving payment: {e}")
+          else:
+            st.warning("Please enter a valid amount and select an owner.")
+
+  with col_pay2:
+    with st.expander("📊 Owner Balance Breakdown", expanded=True):
+      if all_owners:
+        owner_balances = []
+        for o in all_owners:
+          o_billed = sum(
+              float(l.get("calculated_fee", 0))
+              for l in all_logs_data
+              if horse_id_to_owner.get(l.get("horse_id")) == o
+          )
+          o_paid = sum(
+              float(p.get("amount_paid", 0))
+              for p in all_pmts_data
+              if p.get("owner_name") == o
+          )
+          o_balance = o_billed - o_paid
+          owner_balances.append({
+              "Owner Name": o,
+              "Total Billed": f"${o_billed:,.2f}",
+              "Total Paid": f"${o_paid:,.2f}",
+              "Balance Due": f"${o_balance:,.2f}",
+              "Status": "✅ Paid" if o_balance <= 0 else "⚠️ Outstanding",
+          })
+
+        st.dataframe(pd.DataFrame(owner_balances), use_container_width=True)
+      else:
+        st.write("No owner accounts active.")
+
+  st.subheader("Recent Payment History")
+  if all_pmts_data:
+    for p in all_pmts_data:
+      with st.container():
+        c_p1, c_p2 = st.columns([4, 1])
+        with c_p1:
+          st.markdown(
+              f"**{p.get('owner_name')}** — `${float(p.get('amount_paid', 0)):.2f}`"
+              f" CAD via `{p.get('payment_method')}`"
+          )
+          ref_txt = (
+              f"Ref: {p.get('reference_number')} | "
+              if p.get("reference_number")
+              else ""
+          )
+          st.caption(f"{ref_txt}{p.get('notes', '')}")
+        with c_p2:
+          st.markdown(f"📅 **{p.get('payment_date')}**")
+        st.divider()
+  else:
+    st.write("No payments recorded yet.")
