@@ -1,5 +1,6 @@
 import datetime
 import io
+import urllib.parse
 import pandas as pd
 from fpdf import FPDF
 import streamlit as st
@@ -262,6 +263,7 @@ page = st.sidebar.radio(
         "Clinical Progression Tracker",
         "Smart Route Booking",
         "Corridor Calendar & Run-Sheet",
+        "Client Re-booking & Reminders",
         "Client Intake & Waiver",
         "Client Health Portal",
         "Monthly Invoicing & Exports",
@@ -470,7 +472,7 @@ if page == "Operations & Treatment Feed":
     st.write("No treatments recorded yet.")
 
 # ----------------------------------------------------
-# Page 2: Clinical Progression & Biofeedback Tracker (NEW MODULE 10)
+# Page 2: Clinical Progression & Biofeedback Tracker
 # ----------------------------------------------------
 elif page == "Clinical Progression Tracker":
   st.title("🎯 Anatomical Biofeedback & Clinical Progression")
@@ -818,8 +820,147 @@ elif page == "Corridor Calendar & Run-Sheet":
     else:
       st.info(f"No appointments booked for {selected_run_date.strftime('%A, %B %d, %Y')}.")
 
+  st.subheader("Upcoming 14-Day Dispatch Outlook")
+  if all_appts:
+    outlook_rows = []
+    for a in all_appts:
+      h_obj = horse_map.get(a.get("horse_id"), {})
+      outlook_rows.append({
+          "Date": a.get("appointment_date"),
+          "Horse": h_obj.get("name", "N/A"),
+          "Owner": h_obj.get("owner_name", "N/A"),
+          "Barn": h_obj.get("barn_details", {}).get("name", "N/A"),
+          "Travel Fee": f"${float(a.get('travel_fee', 0)):.2f}",
+          "Status": a.get("status", "Confirmed"),
+      })
+    st.dataframe(pd.DataFrame(outlook_rows), use_container_width=True)
+
 # ----------------------------------------------------
-# Page 5: Client Intake & Waiver
+# Page 5: Client Re-booking & Reminders (NEW MODULE 11)
+# ----------------------------------------------------
+elif page == "Client Re-booking & Reminders":
+  st.title("💬 Automated Client Reminders & Re-Booking Hub")
+  st.markdown(
+      "Generate personalized SMS and WhatsApp dispatch notifications,"
+      " arrival reminders, and post-session re-booking prompts."
+  )
+
+  if horses:
+    col_r1, col_r2 = st.columns([1, 1])
+
+    with col_r1:
+      st.subheader("Reminder Message Builder")
+      horse_pick = {
+          f"{h['name']} (Owner: {h['owner_name']} | {h['barn_details']['name']})": h
+          for h in horses
+      }
+      chosen_h_label = st.selectbox(
+          "Select Horse / Owner", list(horse_pick.keys())
+      )
+      h_rem = horse_pick[chosen_h_label]
+
+      phone_num = st.text_input(
+          "Owner Phone Number (for WhatsApp/SMS)", placeholder="e.g. 6135551234"
+      )
+
+      reminder_type = st.selectbox(
+          "Message Type",
+          [
+              "Appointment Confirmation & ETA",
+              "48-Hour Post-Equitron Recovery Check-In",
+              "Bi-Weekly Maintenance Re-Booking Prompt",
+              "Group Barn Route Booking Callout",
+          ],
+      )
+
+      appt_date_txt = st.date_input(
+          "Appointment / Target Date", datetime.date.today()
+      )
+      arrival_window = st.selectbox(
+          "Estimated Arrival Window",
+          [
+              "Morning (9:00 AM - 11:00 AM)",
+              "Midday (11:00 AM - 1:00 PM)",
+              "Afternoon (1:00 PM - 3:30 PM)",
+              "Late Afternoon (3:30 PM - 5:30 PM)",
+          ],
+      )
+
+    with col_r2:
+      st.subheader("Generated Message Preview")
+
+      owner_first = (
+          h_rem.get("owner_name", "there").split()[0]
+          if h_rem.get("owner_name")
+          else "there"
+      )
+      horse_n = h_rem.get("name", "your horse")
+      barn_n = h_rem.get("barn_details", {}).get("name", "the barn")
+
+      if reminder_type == "Appointment Confirmation & ETA":
+        message_body = (
+            f"Hi {owner_first}! Confirming our Equus Performance session for"
+            f" {horse_n} on"
+            f" {appt_date_txt.strftime('%A, %b %d')} at {barn_n}. Our estimated"
+            f" arrival window is {arrival_window}. Please ensure {horse_n} is"
+            " brought in and dry. Looking forward to seeing you!"
+        )
+      elif reminder_type == "48-Hour Post-Equitron Recovery Check-In":
+        message_body = (
+            f"Hi {owner_first}! Just checking in on {horse_n} following our"
+            " Equitron session. How is their topline and movement feeling"
+            " under saddle? Let me know if you noticed any relaxed biofeedback"
+            " changes!"
+        )
+      elif reminder_type == "Bi-Weekly Maintenance Re-Booking Prompt":
+        message_body = (
+            f"Hi {owner_first}! It has been about two weeks since {horse_n}'s"
+            " last cellular therapy session. We are scheduling our upcoming"
+            f" corridor run to {barn_n}. Would you like to reserve a spot to"
+            " maintain their peak performance?"
+        )
+      else:
+        message_body = (
+            f"Hi {owner_first}! We are opening our route dispatch to {barn_n}"
+            f" for {appt_date_txt.strftime('%A, %b %d')}. If we group 3 or"
+            " more horses together, travel mileage fees are 100% waived! Let me"
+            f" know if you'd like to include {horse_n}."
+        )
+
+      st.text_area(
+          "Copy Text", value=message_body, height=160, key="reminder_text_box"
+      )
+
+      # Clean phone number for WhatsApp link
+      clean_phone = "".join(filter(str.isdigit, phone_num))
+      if len(clean_phone) == 10:
+        clean_phone = "1" + clean_phone  # Add North American country code
+
+      if clean_phone:
+        encoded_msg = urllib.parse.quote(message_body)
+        wa_url = f"https://wa.me/{clean_phone}?text={encoded_msg}"
+        st.markdown(f"""
+            <a href="{wa_url}" target="_blank">
+                <button style="
+                    background-color: #25D366;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    font-size: 16px;
+                    border-radius: 8px;
+                    cursor: pointer;
+                    font-weight: bold;
+                    width: 100%;
+                ">📲 Send via WhatsApp</button>
+            </a>
+            """, unsafe_allow_html=True)
+      else:
+        st.caption("💡 Enter a phone number above to enable 1-click WhatsApp messaging.")
+  else:
+    st.info("Please register a horse profile first.")
+
+# ----------------------------------------------------
+# Page 6: Client Intake & Waiver
 # ----------------------------------------------------
 elif page == "Client Intake & Waiver":
   st.title("Client Onboarding & Legal Liability Waiver")
@@ -922,7 +1063,7 @@ elif page == "Client Intake & Waiver":
     st.write("No waivers on record yet.")
 
 # ----------------------------------------------------
-# Page 6: Client Health Portal
+# Page 7: Client Health Portal
 # ----------------------------------------------------
 elif page == "Client Health Portal":
   st.title("Client Health & Progress Portal")
@@ -976,7 +1117,7 @@ elif page == "Client Health Portal":
     st.info("No horses registered in the database yet.")
 
 # ----------------------------------------------------
-# Page 7: Monthly Invoicing & Exports
+# Page 8: Monthly Invoicing & Exports
 # ----------------------------------------------------
 elif page == "Monthly Invoicing & Exports":
   st.title("Monthly Invoicing & Billing Summary")
@@ -1057,7 +1198,7 @@ elif page == "Monthly Invoicing & Exports":
     st.info("No barns registered in the database.")
 
 # ----------------------------------------------------
-# Page 8: Payments & Accounts Receivable
+# Page 9: Payments & Accounts Receivable
 # ----------------------------------------------------
 elif page == "Payments & Accounts Receivable":
   st.title("💳 Accounts Receivable & Payment Tracking")
@@ -1205,7 +1346,7 @@ elif page == "Payments & Accounts Receivable":
     st.write("No payments recorded yet.")
 
 # ----------------------------------------------------
-# Page 9: Veterinary Clinical Reports
+# Page 10: Veterinary Clinical Reports
 # ----------------------------------------------------
 elif page == "Veterinary Clinical Reports":
   st.title("🩺 Veterinary Clinical Summary Reports")
@@ -1289,7 +1430,7 @@ elif page == "Veterinary Clinical Reports":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 10: Corridor Travel & Expense Tracker
+# Page 11: Corridor Travel & Expense Tracker
 # ----------------------------------------------------
 elif page == "Corridor Travel & Expense Tracker":
   st.title("🚗 Corridor Travel & Operational Expense Tracker")
