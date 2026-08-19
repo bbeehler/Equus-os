@@ -259,6 +259,7 @@ page = st.sidebar.radio(
     "Navigation",
     [
         "Operations & Treatment Feed",
+        "Clinical Progression Tracker",
         "Smart Route Booking",
         "Corridor Calendar & Run-Sheet",
         "Client Intake & Waiver",
@@ -469,7 +470,143 @@ if page == "Operations & Treatment Feed":
     st.write("No treatments recorded yet.")
 
 # ----------------------------------------------------
-# Page 2: Smart Route Booking
+# Page 2: Clinical Progression & Biofeedback Tracker (NEW MODULE 10)
+# ----------------------------------------------------
+elif page == "Clinical Progression Tracker":
+  st.title("🎯 Anatomical Biofeedback & Clinical Progression")
+  st.markdown(
+      "Track target anatomical zones, Equitron pulse intensity settings, and"
+      " palpation reactivity over consecutive sessions."
+  )
+
+  if horses:
+    col_p1, col_p2 = st.columns([1, 1])
+
+    with col_p1:
+      with st.form("log_assessment_form"):
+        st.subheader("Log Anatomical Scan & Biofeedback")
+        horse_picker_map = {f"{h['name']} ({h['owner_name']})": h for h in horses}
+        h_choice = st.selectbox(
+            "Select Equine Patient", list(horse_picker_map.keys())
+        )
+        target_horse = horse_picker_map[h_choice]
+
+        ass_date = st.date_input("Assessment Date", datetime.date.today())
+        zone = st.selectbox(
+            "Target Anatomical Zone",
+            [
+                "Cervical / Poll & Atlas",
+                "Withers & Trapezius / Shoulder",
+                "Thoracolumbar Spine & Epaxials",
+                "Sacroiliac Joint & Gluteal Muscle",
+                "Stifles & Hocks",
+                "Distal Limb / Flexor Tendons & Suspensory",
+                "Pulmonary Airway / Intercostal Space",
+            ],
+        )
+        intensity = st.slider(
+            "Equitron Pulse Intensity Setting (%)",
+            min_value=10,
+            max_value=100,
+            value=45,
+            step=5,
+        )
+        reactivity = st.select_slider(
+            "Biofeedback Reactivity Score",
+            options=[1, 2, 3, 4, 5],
+            value=3,
+            help=(
+                "1: Relaxed/Neutral, 2: Mild Fasciculation, 3: Guarded,"
+                " 4: Pain Avoidance/Twitch, 5: Acute Spasm"
+            ),
+        )
+        reactivity_labels = {
+            1: "1 - Relaxed / Neutral Resting Potential",
+            2: "2 - Mild Fasciculation (Good Tolerance)",
+            3: "3 - Guarded / Moderate Muscle Tightness",
+            4: "4 - High Sensitivity / Avoidance Twitch",
+            5: "5 - Severe Spasm / Acute Biofeedback Area",
+        }
+        st.caption(f"Selected: **{reactivity_labels[reactivity]}**")
+
+        p_notes = st.text_area(
+            "Palpation Findings & Bio-stimulation Response"
+        )
+        post_response = st.text_input(
+            "Immediate Post-Session State (e.g. Licking/Chewing, Softened"
+            " Topline)"
+        )
+
+        if st.form_submit_button("Record Clinical Progression Data"):
+          try:
+            supabase.table("clinical_assessments").insert({
+                "assessment_date": str(ass_date),
+                "horse_id": str(target_horse["id"]),
+                "target_anatomical_zone": zone,
+                "biofeedback_pulse_intensity": int(intensity),
+                "reactivity_score": int(reactivity),
+                "palpation_notes": p_notes,
+                "post_session_response": post_response,
+            }).execute()
+            st.success(f"Recorded assessment data for {target_horse['name']}!")
+            st.rerun()
+          except Exception as ex:
+            st.error(f"Error logging clinical assessment: {ex}")
+
+    with col_p2:
+      st.subheader(f"Progression History: {target_horse['name']}")
+      try:
+        ass_res = (
+            supabase.table("clinical_assessments")
+            .select("*")
+            .eq("horse_id", str(target_horse["id"]))
+            .order("assessment_date", desc=True)
+            .execute()
+        )
+        horse_assessments = ass_res.data if ass_res.data else []
+      except Exception:
+        horse_assessments = []
+
+      if horse_assessments:
+        df_ass = pd.DataFrame(horse_assessments)
+        df_display = df_ass[[
+            "assessment_date",
+            "target_anatomical_zone",
+            "biofeedback_pulse_intensity",
+            "reactivity_score",
+            "palpation_notes",
+        ]].rename(
+            columns={
+                "assessment_date": "Date",
+                "target_anatomical_zone": "Zone",
+                "biofeedback_pulse_intensity": "Intensity (%)",
+                "reactivity_score": "Reactivity (1-5)",
+                "palpation_notes": "Findings",
+            }
+        )
+
+        st.dataframe(df_display, use_container_width=True)
+
+        avg_reactivity = sum(
+            a.get("reactivity_score", 3) for a in horse_assessments
+        ) / len(horse_assessments)
+        c_m1, c_m2 = st.columns(2)
+        c_m1.metric("Assessments Recorded", len(horse_assessments))
+        c_m2.metric(
+            "Avg Reactivity Index",
+            f"{avg_reactivity:.1f} / 5.0",
+            delta="Lower is Better"
+            if avg_reactivity < 3
+            else "Elevated Sensitivity",
+            delta_color="normal" if avg_reactivity < 3 else "inverse",
+        )
+      else:
+        st.info("No anatomical scan data recorded yet for this horse.")
+  else:
+    st.info("Please register a horse profile first.")
+
+# ----------------------------------------------------
+# Page 3: Smart Route Booking
 # ----------------------------------------------------
 elif page == "Smart Route Booking":
   st.title("Smart Route Corridor Dispatcher")
@@ -574,7 +711,7 @@ elif page == "Smart Route Booking":
     st.write("No appointments scheduled.")
 
 # ----------------------------------------------------
-# Page 3: Corridor Calendar & Daily Run-Sheet (NEW MODULE)
+# Page 4: Corridor Calendar & Daily Run-Sheet
 # ----------------------------------------------------
 elif page == "Corridor Calendar & Run-Sheet":
   st.title("📅 Corridor Schedule & Daily Dispatch Run-Sheet")
@@ -681,23 +818,8 @@ elif page == "Corridor Calendar & Run-Sheet":
     else:
       st.info(f"No appointments booked for {selected_run_date.strftime('%A, %B %d, %Y')}.")
 
-  st.subheader("Upcoming 14-Day Dispatch Outlook")
-  if all_appts:
-    outlook_rows = []
-    for a in all_appts:
-      h_obj = horse_map.get(a.get("horse_id"), {})
-      outlook_rows.append({
-          "Date": a.get("appointment_date"),
-          "Horse": h_obj.get("name", "N/A"),
-          "Owner": h_obj.get("owner_name", "N/A"),
-          "Barn": h_obj.get("barn_details", {}).get("name", "N/A"),
-          "Travel Fee": f"${float(a.get('travel_fee', 0)):.2f}",
-          "Status": a.get("status", "Confirmed"),
-      })
-    st.dataframe(pd.DataFrame(outlook_rows), use_container_width=True)
-
 # ----------------------------------------------------
-# Page 4: Client Intake & Waiver
+# Page 5: Client Intake & Waiver
 # ----------------------------------------------------
 elif page == "Client Intake & Waiver":
   st.title("Client Onboarding & Legal Liability Waiver")
@@ -800,7 +922,7 @@ elif page == "Client Intake & Waiver":
     st.write("No waivers on record yet.")
 
 # ----------------------------------------------------
-# Page 5: Client Health Portal
+# Page 6: Client Health Portal
 # ----------------------------------------------------
 elif page == "Client Health Portal":
   st.title("Client Health & Progress Portal")
@@ -854,7 +976,7 @@ elif page == "Client Health Portal":
     st.info("No horses registered in the database yet.")
 
 # ----------------------------------------------------
-# Page 6: Monthly Invoicing & Exports
+# Page 7: Monthly Invoicing & Exports
 # ----------------------------------------------------
 elif page == "Monthly Invoicing & Exports":
   st.title("Monthly Invoicing & Billing Summary")
@@ -935,7 +1057,7 @@ elif page == "Monthly Invoicing & Exports":
     st.info("No barns registered in the database.")
 
 # ----------------------------------------------------
-# Page 7: Payments & Accounts Receivable
+# Page 8: Payments & Accounts Receivable
 # ----------------------------------------------------
 elif page == "Payments & Accounts Receivable":
   st.title("💳 Accounts Receivable & Payment Tracking")
@@ -1083,7 +1205,7 @@ elif page == "Payments & Accounts Receivable":
     st.write("No payments recorded yet.")
 
 # ----------------------------------------------------
-# Page 8: Veterinary Clinical Reports
+# Page 9: Veterinary Clinical Reports
 # ----------------------------------------------------
 elif page == "Veterinary Clinical Reports":
   st.title("🩺 Veterinary Clinical Summary Reports")
@@ -1167,7 +1289,7 @@ elif page == "Veterinary Clinical Reports":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 9: Corridor Travel & Expense Tracker
+# Page 10: Corridor Travel & Expense Tracker
 # ----------------------------------------------------
 elif page == "Corridor Travel & Expense Tracker":
   st.title("🚗 Corridor Travel & Operational Expense Tracker")
