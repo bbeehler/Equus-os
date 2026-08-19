@@ -177,6 +177,74 @@ def create_pdf_invoice(barn_name, invoice_rows, total_billed):
   return pdf.output()
 
 
+def create_facility_reconciliation_pdf(
+    barn_obj, horse_summary_rows, total_billed, total_waived
+):
+  pdf = PDFInvoice()
+  pdf.add_page()
+  pdf.set_font("helvetica", "B", 14)
+  pdf.cell(
+      0,
+      8,
+      f"FACILITY RETAINER & RECONCILIATION: {barn_obj.get('name', 'Facility').upper()}",
+      0,
+      1,
+      "L",
+  )
+
+  pdf.set_font("helvetica", "", 10)
+  pdf.cell(
+      0,
+      5,
+      f"Billing Period: {datetime.date.today().strftime('%B %Y')} | Status:"
+      f" {'Flagship Reference Facility' if barn_obj.get('is_flagship') else 'Standard Partner Facility'}",
+      0,
+      1,
+  )
+  pdf.cell(0, 5, "Payment Terms: Due upon receipt via e-Transfer", 0, 1)
+  pdf.ln(5)
+
+  pdf.set_font("helvetica", "B", 9)
+  pdf.set_fill_color(240, 240, 240)
+  pdf.cell(40, 7, "Horse Name", 1, 0, "L", True)
+  pdf.cell(35, 7, "Owner", 1, 0, "L", True)
+  pdf.cell(35, 7, "Tier Status", 1, 0, "C", True)
+  pdf.cell(25, 7, "Mins Used", 1, 0, "C", True)
+  pdf.cell(25, 7, "Waived Value", 1, 0, "R", True)
+  pdf.cell(30, 7, "Billable Fee", 1, 1, "R", True)
+
+  pdf.set_font("helvetica", "", 8)
+  for r in horse_summary_rows:
+    pdf.cell(40, 6, str(r["Horse Name"][:20]), 1, 0, "L")
+    pdf.cell(35, 6, str(r["Owner"][:18]), 1, 0, "L")
+    pdf.cell(35, 6, str(r["Tier"]), 1, 0, "C")
+    pdf.cell(25, 6, str(r["Minutes Used"]), 1, 0, "C")
+    pdf.cell(25, 6, str(r["Waived Promo"]), 1, 0, "R")
+    pdf.cell(30, 6, str(r["Total Billable"]), 1, 1, "R")
+
+  pdf.ln(6)
+  pdf.set_font("helvetica", "B", 11)
+  pdf.cell(
+      0,
+      6,
+      f"Total Promotional Allowance Provided: ${total_waived:.2f} CAD",
+      0,
+      1,
+      "R",
+  )
+  pdf.set_font("helvetica", "B", 12)
+  pdf.cell(
+      0,
+      7,
+      f"Net Facility Total Due: ${total_billed:.2f} CAD",
+      0,
+      1,
+      "R",
+  )
+
+  return pdf.output()
+
+
 def create_vet_report_pdf(horse_obj, vet_name, clinical_logs):
   pdf = PDFInvoice()
   pdf.add_page()
@@ -262,6 +330,7 @@ page = st.sidebar.radio(
         "Operations & Treatment Feed",
         "Clinical Progression Tracker",
         "Pre-Paid Packages & Credits",
+        "Facility Retainer Reconciler",
         "Smart Route Booking",
         "Corridor Calendar & Run-Sheet",
         "Client Re-booking & Reminders",
@@ -610,7 +679,7 @@ elif page == "Clinical Progression Tracker":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 3: Pre-Paid Packages & Credit Passes (NEW MODULE 13)
+# Page 3: Pre-Paid Packages & Credit Passes
 # ----------------------------------------------------
 elif page == "Pre-Paid Packages & Credits":
   st.title("🎟️ Pre-Paid Multi-Session Packages & Passes")
@@ -766,7 +835,105 @@ elif page == "Pre-Paid Packages & Credits":
     st.write("No packages registered yet.")
 
 # ----------------------------------------------------
-# Page 4: Smart Route Booking
+# Page 4: Facility Retainer & Intensive Reconciler (NEW MODULE 14)
+# ----------------------------------------------------
+elif page == "Facility Retainer Reconciler":
+  st.title("🏛️ Facility Retainer & Intensive Reconciliation")
+  st.markdown(
+      "Manage facility partner contracts, monitor promotional minute"
+      " allowances vs. standard overages, and generate master facility"
+      " statements."
+  )
+
+  if barns:
+    barn_pick = {b["name"]: b for b in barns}
+    chosen_bname = st.selectbox(
+        "Select Partner Facility", list(barn_pick.keys())
+    )
+    chosen_b = barn_pick[chosen_bname]
+
+    # Fetch facility horses
+    f_horses = [h for h in horses if h.get("barn_id") == chosen_b["id"]]
+    f_horse_ids = [h["id"] for h in f_horses]
+
+    # Fetch logs for this barn
+    try:
+      all_l_res = supabase.table("treatment_logs").select("*").execute()
+      all_l = all_l_res.data if all_l_res.data else []
+      facility_l = [l for l in all_l if l.get("horse_id") in f_horse_ids]
+    except Exception:
+      facility_l = []
+
+    mktg_horses = [h for h in f_horses if h.get("is_marketing_tier", False)]
+    std_horses = [h for h in f_horses if not h.get("is_marketing_tier", False)]
+
+    # Metrics
+    tot_mins = sum(int(l.get("duration_minutes", 0)) for l in facility_l)
+    tot_billed = sum(float(l.get("calculated_fee", 0)) for l in facility_l)
+
+    # Compute promo savings provided to barn
+    waived_promo_mins = 0
+    for mh in mktg_horses:
+      used = int(mh.get("minutes_used_this_month", 0))
+      waived_promo_mins += min(used, 200)
+    waived_promo_value = waived_promo_mins * 2.0  # Valued at $2.00/min standard
+
+    c_b1, c_b2, c_b3, c_b4 = st.columns(4)
+    c_b1.metric("Active Stabled Horses", len(f_horses))
+    c_b2.metric("Total Facility Therapy", f"{tot_mins:,} Mins")
+    c_b3.metric("Waived Promo Value", f"${waived_promo_value:,.2f} CAD")
+    c_b4.metric("Net Facility Billable", f"${tot_billed:,.2f} CAD")
+
+    st.divider()
+
+    st.subheader(f"Boarder & Intensive Stabling Ledger: {chosen_bname}")
+
+    recon_rows = []
+    for h in f_horses:
+      h_used = int(h.get("minutes_used_this_month", 0))
+      is_mktg = h.get("is_marketing_tier", False)
+      tier_txt = (
+          "🌟 Marketing Promo Tier (200 Free Mins)"
+          if is_mktg
+          else "Standard Tier ($1.00 Baseline)"
+      )
+
+      h_logs = [l for l in facility_l if l.get("horse_id") == h["id"]]
+      h_billed = sum(float(l.get("calculated_fee", 0)) for l in h_logs)
+
+      waived_for_h = (min(h_used, 200) * 2.0) if is_mktg else 0.0
+
+      recon_rows.append({
+          "Horse Name": h.get("name", "Unknown"),
+          "Owner": h.get("owner_name", "Unknown"),
+          "Tier": tier_txt,
+          "Minutes Used": h_used,
+          "Waived Promo": f"${waived_for_h:.2f}",
+          "Total Billable": f"${h_billed:.2f}",
+      })
+
+    if recon_rows:
+      st.dataframe(pd.DataFrame(recon_rows), use_container_width=True)
+
+      # 1-Click Master Facility PDF Generator
+      facility_pdf_bytes = create_facility_reconciliation_pdf(
+          chosen_b, recon_rows, tot_billed, waived_promo_value
+      )
+
+      st.download_button(
+          label="📄 Export Master Facility Retainer & Reconciliation Statement"
+          " (PDF)",
+          data=bytes(facility_pdf_bytes),
+          file_name=f"EquusOS_Facility_Statement_{chosen_bname.replace(' ', '_')}_{datetime.date.today()}.pdf",
+          mime="application/pdf",
+      )
+    else:
+      st.info(f"No horses stabled at {chosen_bname} yet.")
+  else:
+    st.info("No facilities registered.")
+
+# ----------------------------------------------------
+# Page 5: Smart Route Booking
 # ----------------------------------------------------
 elif page == "Smart Route Booking":
   st.title("Smart Route Corridor Dispatcher")
@@ -871,7 +1038,7 @@ elif page == "Smart Route Booking":
     st.write("No appointments scheduled.")
 
 # ----------------------------------------------------
-# Page 5: Corridor Calendar & Daily Run-Sheet
+# Page 6: Corridor Calendar & Daily Run-Sheet
 # ----------------------------------------------------
 elif page == "Corridor Calendar & Run-Sheet":
   st.title("📅 Corridor Schedule & Daily Dispatch Run-Sheet")
@@ -994,7 +1161,7 @@ elif page == "Corridor Calendar & Run-Sheet":
     st.dataframe(pd.DataFrame(outlook_rows), use_container_width=True)
 
 # ----------------------------------------------------
-# Page 6: Client Re-booking & Reminders
+# Page 7: Client Re-booking & Reminders
 # ----------------------------------------------------
 elif page == "Client Re-booking & Reminders":
   st.title("💬 Automated Client Reminders & Re-Booking Hub")
@@ -1117,7 +1284,7 @@ elif page == "Client Re-booking & Reminders":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 7: Client Intake & Waiver
+# Page 8: Client Intake & Waiver
 # ----------------------------------------------------
 elif page == "Client Intake & Waiver":
   st.title("Client Onboarding & Legal Liability Waiver")
@@ -1220,7 +1387,7 @@ elif page == "Client Intake & Waiver":
     st.write("No waivers on record yet.")
 
 # ----------------------------------------------------
-# Page 8: Client Health Portal
+# Page 9: Client Health Portal
 # ----------------------------------------------------
 elif page == "Client Health Portal":
   st.title("Client Health & Progress Portal")
@@ -1274,7 +1441,7 @@ elif page == "Client Health Portal":
     st.info("No horses registered in the database yet.")
 
 # ----------------------------------------------------
-# Page 9: Monthly Invoicing & Exports
+# Page 10: Monthly Invoicing & Exports
 # ----------------------------------------------------
 elif page == "Monthly Invoicing & Exports":
   st.title("Monthly Invoicing & Billing Summary")
@@ -1355,7 +1522,7 @@ elif page == "Monthly Invoicing & Exports":
     st.info("No barns registered in the database.")
 
 # ----------------------------------------------------
-# Page 10: Payments & Accounts Receivable
+# Page 11: Payments & Accounts Receivable
 # ----------------------------------------------------
 elif page == "Payments & Accounts Receivable":
   st.title("💳 Accounts Receivable & Payment Tracking")
@@ -1503,7 +1670,7 @@ elif page == "Payments & Accounts Receivable":
     st.write("No payments recorded yet.")
 
 # ----------------------------------------------------
-# Page 11: Veterinary Clinical Reports
+# Page 12: Veterinary Clinical Reports
 # ----------------------------------------------------
 elif page == "Veterinary Clinical Reports":
   st.title("🩺 Veterinary Clinical Summary Reports")
@@ -1587,7 +1754,7 @@ elif page == "Veterinary Clinical Reports":
     st.info("Please register a horse profile first.")
 
 # ----------------------------------------------------
-# Page 12: Corridor Travel & Expense Tracker
+# Page 13: Corridor Travel & Expense Tracker
 # ----------------------------------------------------
 elif page == "Corridor Travel & Expense Tracker":
   st.title("🚗 Corridor Travel & Operational Expense Tracker")
@@ -1738,7 +1905,7 @@ elif page == "Corridor Travel & Expense Tracker":
     st.write("No travel expenses recorded.")
 
 # ----------------------------------------------------
-# Page 13: Executive P&L Snapshot
+# Page 14: Executive P&L Snapshot
 # ----------------------------------------------------
 elif page == "Executive P&L Snapshot":
   st.title("📊 Executive P&L Financial Performance")
