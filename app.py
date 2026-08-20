@@ -351,7 +351,6 @@ def create_vet_report_pdf(horse_obj, vet_name, clinical_logs):
 # ----------------------------------------------------
 barns, horses, barn_map = get_data_maps()
 
-# Check for public self-serve mode in URL query params: ?mode=intake
 query_params = st.query_params
 is_public_intake = query_params.get("mode") == "intake"
 
@@ -364,6 +363,7 @@ if not is_public_intake:
             "Operations & Treatment Feed",
             "Clinical Progression Tracker",
             "Photo & Video Progress Gallery",
+            "Trainer & Referral Tracker",
             "Pre-Paid Packages & Credits",
             "Facility Retainer Reconciler",
             "Smart Route Booking",
@@ -469,6 +469,131 @@ if page == "Public Intake Form":
                         st.error(f"Submission error: {e}")
             else:
                 st.warning("Please fill in all required fields marked with *.")
+
+# ----------------------------------------------------
+# Page: Trainer & Barn Referral Incentive Tracker
+# ----------------------------------------------------
+elif page == "Trainer & Referral Tracker":
+    st.title("🤝 Trainer & Barn Manager Referral Incentives")
+    st.markdown(
+        "Track referring coaches, barn managers, and veterinary advocates. "
+        "Calculate referral commission payouts and track earned comped session credits."
+    )
+
+    try:
+        ref_res = supabase.table("referral_partners").select("*").order("created_at", desc=True).execute()
+        referral_partners = ref_res.data if ref_res.data else []
+    except Exception:
+        referral_partners = []
+
+    try:
+        ref_logs_res = supabase.table("referral_commissions").select("*").order("created_at", desc=True).execute()
+        ref_commissions = ref_logs_res.data if ref_logs_res.data else []
+    except Exception:
+        ref_commissions = []
+
+    col_rf1, col_rf2 = st.columns([1, 1])
+
+    with col_rf1:
+        with st.expander("➕ Register Referral Partner / Coach", expanded=True):
+            with st.form("add_partner_form"):
+                p_name = st.text_input("Partner / Trainer Full Name*")
+                p_role = st.selectbox("Role", ["Head Trainer / Coach", "Barn Manager", "Veterinarian", "Equine Bodyworker / Farrier", "Client Advocate"])
+                p_email = st.text_input("Email Address", placeholder="trainer@barn.ca")
+                p_phone = st.text_input("Phone Number")
+                barn_opts = {b["name"]: b["id"] for b in barns}
+                p_barn = st.selectbox("Associated Barn Facility", list(barn_opts.keys())) if barn_opts else "None"
+                
+                rew_type = st.selectbox("Incentive Type", ["Cash Split (10% of Referred Billings)", "Comped Session Credits (1 Free 20-min Session per 5 Referred)", "Fixed Referral Fee ($15 per New Client)"])
+                p_notes = st.text_area("Partnership Notes")
+
+                if st.form_submit_button("Save Referral Partner"):
+                    if p_name:
+                        try:
+                            supabase.table("referral_partners").insert({
+                                "partner_name": p_name,
+                                "role": p_role,
+                                "email": p_email,
+                                "phone": p_phone,
+                                "barn_id": barn_opts[p_barn] if barn_opts and p_barn != "None" else None,
+                                "incentive_type": rew_type,
+                                "notes": p_notes,
+                            }).execute()
+                            st.success(f"Registered referral partner: {p_name}!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error registering partner: {e}")
+                    else:
+                        st.warning("Please enter partner name.")
+
+    with col_rf2:
+        with st.expander("🎯 Log Client Referral & Compute Payout", expanded=True):
+            if referral_partners and horses:
+                with st.form("log_referral_form"):
+                    partner_lookup = {f"{p['partner_name']} ({p['role']})": p for p in referral_partners}
+                    sel_p = st.selectbox("Referring Partner", list(partner_lookup.keys()))
+                    chosen_partner = partner_lookup[sel_p]
+
+                    horse_lookup_ref = {f"{h['name']} (Owner: {h['owner_name']})": h for h in horses}
+                    sel_h = st.selectbox("Referred Equine Client", list(horse_lookup_ref.keys()))
+                    chosen_h = horse_lookup_ref[sel_h]
+
+                    ref_date = st.date_input("Referral Date", datetime.date.today())
+                    session_rev = st.number_input("Session Value / Package Billed ($)", min_value=0.0, value=60.0, step=10.0)
+
+                    earned_amount = 0.0
+                    earned_credits = 0
+                    rew_t = chosen_partner.get("incentive_type", "")
+                    if "10%" in rew_t:
+                        earned_amount = round(session_rev * 0.10, 2)
+                    elif "Fixed" in rew_t:
+                        earned_amount = 15.00
+                    elif "Comped" in rew_t:
+                        earned_credits = 1
+
+                    st.info(f"💡 **Computed Reward:** ${earned_amount:.2f} CAD cash | {earned_credits} session credits")
+                    ref_notes = st.text_input("Notes / Payout Ref")
+
+                    if st.form_submit_button("Record Referral Credit"):
+                        try:
+                            supabase.table("referral_commissions").insert({
+                                "partner_id": chosen_partner["id"],
+                                "horse_id": chosen_h["id"],
+                                "referral_date": str(ref_date),
+                                "session_value": float(session_rev),
+                                "commission_amount": float(earned_amount),
+                                "earned_credits": int(earned_credits),
+                                "payout_status": "Pending",
+                                "notes": ref_notes,
+                            }).execute()
+                            st.success(f"Logged referral commission for {chosen_partner['partner_name']}!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error saving referral commission: {e}")
+            else:
+                st.info("Please ensure at least one partner and one horse are registered.")
+
+    st.subheader("Referral Commission & Comped Credits Ledger")
+    if ref_commissions:
+        partner_map = {p["id"]: p for p in referral_partners}
+        horse_dict_map = {h["id"]: h for h in horses}
+
+        ledger_rows = []
+        for rc in ref_commissions:
+            p_obj = partner_map.get(rc.get("partner_id"), {})
+            h_obj = horse_dict_map.get(rc.get("horse_id"), {})
+            ledger_rows.append({
+                "Date": rc.get("referral_date"),
+                "Referring Coach / Partner": p_obj.get("partner_name", "Unknown"),
+                "Referred Horse": h_obj.get("name", "Unknown"),
+                "Session Value": f"${float(rc.get('session_value', 0)):.2f}",
+                "Commission Earned": f"${float(rc.get('commission_amount', 0)):.2f}",
+                "Comped Credits": rc.get("earned_credits", 0),
+                "Status": rc.get("payout_status", "Pending"),
+            })
+        st.dataframe(pd.DataFrame(ledger_rows), use_container_width=True)
+    else:
+        st.write("No referral commissions logged yet.")
 
 # ----------------------------------------------------
 # Page: Public Intake & QR Generator
@@ -644,7 +769,7 @@ elif page == "Operations & Treatment Feed":
                         except Exception as e:
                             st.error(f"Error logging session: {e}")
             else:
-                st.info("Please register a horse first.")
+                st.info("Please register a horse profile first.")
 
     st.subheader("Live Clinical Treatment Feed")
     try:
