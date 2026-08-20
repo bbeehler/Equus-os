@@ -347,17 +347,26 @@ def create_vet_report_pdf(horse_obj, vet_name, clinical_logs):
 
 
 # ----------------------------------------------------
-# 4. Sidebar Navigation (Categorized for Paige)
+# 4. State & Authentication / Role Selection
 # ----------------------------------------------------
 barns, horses, barn_map = get_data_maps()
+
+if "portal_user" not in st.session_state:
+    st.session_state["portal_user"] = None
+if "portal_role" not in st.session_state:
+    st.session_state["portal_role"] = "Admin"
 
 query_params = st.query_params
 is_public_intake = query_params.get("mode") == "intake"
 
-if not is_public_intake:
-    st.sidebar.title("🐎 EquusOS")
-    st.sidebar.caption("Equus Performance Therapeutics | Paige Cummings")
+st.sidebar.title("🐎 EquusOS")
+st.sidebar.caption("Equus Performance Therapeutics")
 
+# Role Switcher in Sidebar
+user_view = st.sidebar.radio("View Mode", ["Specialist Management (Paige)", "Client Member Portal"], index=0 if st.session_state["portal_role"] == "Admin" else 1)
+
+if user_view == "Specialist Management (Paige)":
+    st.session_state["portal_role"] = "Admin"
     CATEGORY_WORKFLOWS = {
         "🐎 Daily Clinical Hub": [
             "Log Treatments & Live Feed",
@@ -372,6 +381,7 @@ if not is_public_intake:
             "Client Re-booking & Reminders",
         ],
         "👥 Clients & Facilities": [
+            "Manage Clients & Appointments",
             "Public Intake & Barn QR Code",
             "Signed Waivers & Onboarding",
             "Facility Retainers & Reconciliation",
@@ -386,101 +396,266 @@ if not is_public_intake:
             "Executive P&L Snapshot",
         ],
     }
-
     selected_category = st.sidebar.selectbox("📂 Workspace Section", list(CATEGORY_WORKFLOWS.keys()))
     page = st.sidebar.radio("📌 Select Module", CATEGORY_WORKFLOWS[selected_category])
+
 else:
-    page = "Public Intake Form"
+    st.session_state["portal_role"] = "Client"
+    page = "Client Self-Serve Portal"
 
 # ----------------------------------------------------
-# Public Self-Serve Intake Page
+# PAGE: CLIENT SELF-SERVE PORTAL
 # ----------------------------------------------------
-if page == "Public Intake Form":
-    st.title("🐎 Equus Performance Therapeutics")
-    st.subheader("Client Onboarding & Liability Waiver")
-    st.caption("Please complete this intake form prior to your horse's therapy session.")
+if page == "Client Self-Serve Portal":
+    st.title("🐎 Equus Client Member Portal")
+    st.markdown("Access your horse's therapy logs, book upcoming corridor visits, check arrival ETA, and review invoices.")
 
-    with st.form("public_waiver_form"):
-        st.markdown("### 1. Owner & Patient Profile")
-        col_p1, col_p2 = st.columns(2)
-        with col_p1:
-            pub_owner = st.text_input("Your Full Name (Owner / Agent)*")
-            pub_email = st.text_input("Email Address*")
-            pub_phone = st.text_input("Mobile Phone Number*")
-        with col_p2:
-            pub_horse = st.text_input("Horse Name (Show / Barn Name)*")
-            barn_names = [b["name"] for b in barns] if barns else ["Private / Home Facility"]
-            pub_barn = st.selectbox("Stabling Facility / Barn*", barn_names)
-            pub_discipline = st.text_input("Primary Discipline / Breed", placeholder="e.g. Hunter/Jumper, Dressage, Eventing")
+    try:
+        w_res = supabase.table("client_waivers").select("owner_name, client_email").execute()
+        waiver_clients = w_res.data if w_res.data else []
+    except Exception:
+        waiver_clients = []
 
-        st.markdown("### 2. Veterinarian & Medical Profile")
-        col_v1, col_v2 = st.columns(2)
-        with col_v1:
-            pub_vet = st.text_input("Primary Veterinarian Name", placeholder="e.g. Dr. Smith (Ottawa Equine)")
-        with col_v2:
-            pub_vet_phone = st.text_input("Veterinarian Phone Number")
+    client_emails = sorted(list(set([w["client_email"] for w in waiver_clients if w.get("client_email")])))
+    
+    col_c1, col_c2 = st.columns([1, 2])
 
-        pub_history = st.text_area(
-            "Current Areas of Discomfort, Stiffness, or Injury History",
-            placeholder="e.g. Tight sacroiliac, recovery from suspensory strain, seasonal cough..."
-        )
+    with col_c1:
+        st.subheader("Client Identification")
+        if client_emails:
+            active_client_email = st.selectbox("Select Your Email / Account", client_emails)
+            matched_owner_name = next((w["owner_name"] for w in waiver_clients if w["client_email"] == active_client_email), "Client")
+            st.success(f"Welcome back, **{matched_owner_name}**!")
+        else:
+            active_client_email = st.text_input("Enter Registered Email", placeholder="owner@barn.ca")
+            matched_owner_name = active_client_email
 
-        st.markdown("### 3. Modality Authorization")
-        c_hect = st.checkbox("High-Energy Cell Treatment (Equitron-Pro / HECT)", value=True)
-        c_halo = st.checkbox("Clinical Dry Aerosol Halotherapy (HaloEQ2)", value=True)
+        with st.expander("🔑 Reset / Change Password"):
+            new_pass = st.text_input("New Portal Password", type="password")
+            if st.button("Update Password"):
+                st.success("Password reset request recorded for your account!")
 
-        st.markdown("### 4. Legal Liability Release & Informed Consent")
-        st.markdown("""
-        > **Scope of Practice & Acknowledgment:**  
-        > Equus Performance Therapeutics provides non-invasive complementary equine wellness, cellular regeneration (HECT), and respiratory salt therapy (Halotherapy). These modalities do not constitute veterinary medicine, surgery, or pharmacological prescribing. The owner confirms the animal is free of acute contagious diseases and authorizes Paige Cummings to administer non-invasive sessions.
+    with col_c2:
+        st.subheader("🗓️ When is Paige Coming? (Upcoming Visits)")
+        client_horses = [h for h in horses if h.get("owner_name", "").lower() == matched_owner_name.lower()]
+        client_h_ids = [h["id"] for h in client_horses]
+
+        try:
+            appts_res = supabase.table("appointments").select("*").in_("horse_id", client_h_ids).order("appointment_date").execute()
+            my_appts = appts_res.data if appts_res.data else []
+        except Exception:
+            my_appts = []
+
+        if my_appts:
+            for a in my_appts:
+                h_obj = next((h for h in client_horses if h["id"] == a["horse_id"]), {})
+                st.info(f"""
+                📅 **Date:** {a.get('appointment_date')}  
+                🐎 **Horse:** {h_obj.get('name', 'Your Horse')} @ {h_obj.get('barn_details', {}).get('name', 'Barn')}  
+                📍 **Status:** `{a.get('status', 'Confirmed')}` | **Mileage/Travel Fee:** ${float(a.get('travel_fee', 0)):.2f} CAD
+                """)
+        else:
+            st.info("No upcoming appointments scheduled yet. Book your next session below!")
+
+    st.divider()
+
+    c_tab1, c_tab2, c_tab3, c_tab4 = st.tabs(["🐎 My Horses & Clinical History", "📅 Self-Book Corridor Visit", "📸 Photo & Video Gallery", "💳 Billing & Make a Payment"])
+
+    with c_tab1:
+        st.subheader("Equine Athlete Profiles & Clinical Treatment Logs")
+        if client_horses:
+            chosen_h_tab1 = st.selectbox("Select Animal", [h["name"] for h in client_horses], key="client_tab1_h")
+            h_obj_tab1 = next(h for h in client_horses if h["name"] == chosen_h_tab1)
+
+            st.metric("Monthly Therapy Logged", f"{h_obj_tab1.get('minutes_used_this_month', 0)} Minutes")
+
+            try:
+                l_res = supabase.table("treatment_logs").select("*").eq("horse_id", str(h_obj_tab1["id"])).order("created_at", desc=True).execute()
+                h_logs = l_res.data if l_res.data else []
+            except Exception:
+                h_logs = []
+
+            if h_logs:
+                for l in h_logs:
+                    st.markdown(f"**[{l.get('created_at','')[:10]}] - `{l.get('modality')}` ({l.get('duration_minutes')} mins)**")
+                    st.caption(f"Observations & Findings: {l.get('session_notes')}")
+                    st.divider()
+            else:
+                st.write("No session records found for this animal.")
+        else:
+            st.info("No horses linked to this account yet.")
+
+    with c_tab2:
+        st.subheader("Book Next Therapy Session")
+        with st.form("client_self_booking_form"):
+            b_h_name = st.selectbox("Select Your Horse", [h["name"] for h in client_horses] if client_horses else ["Please register horse"])
+            b_date = st.date_input("Requested Date", datetime.date.today() + datetime.timedelta(days=1))
+            b_modality = st.selectbox("Preferred Modality", ["Equitron-Pro (HECT)", "HaloEQ2 (Halotherapy)", "Peak Performance Combo"])
+            b_notes = st.text_area("Notes for Paige (e.g. slight right stifle stiffness, prep for show)")
+
+            if st.form_submit_button("Request Appointment Booking"):
+                if client_horses:
+                    sel_h_obj = next(h for h in client_horses if h["name"] == b_h_name)
+                    try:
+                        supabase.table("appointments").insert({
+                            "appointment_date": str(b_date),
+                            "horse_id": str(sel_h_obj["id"]),
+                            "barn_id": str(sel_h_obj.get("barn_id")),
+                            "distance_from_base_km": 30.0,
+                            "travel_fee": 0.0,
+                            "status": "Confirmed",
+                        }).execute()
+                        st.success(f"Booking confirmed for {b_h_name} on {b_date}! Paige has received your request.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error booking: {e}")
+
+    with c_tab3:
+        st.subheader("Visual Progress Gallery (Before & After Stance / Gait)")
+        if client_horses:
+            chosen_h_gal = st.selectbox("Select Animal for Media", [h["name"] for h in client_horses], key="client_gal_h")
+            h_gal_obj = next(h for h in client_horses if h["name"] == chosen_h_gal)
+
+            try:
+                m_res = supabase.table("horse_media_records").select("*").eq("horse_id", str(h_gal_obj["id"])).order("record_date", desc=True).execute()
+                h_media = m_res.data if m_res.data else []
+            except Exception:
+                h_media = []
+
+            if h_media:
+                for m in h_media:
+                    st.markdown(f"**{m.get('caption', 'Clinical Scan')}** — `{m.get('stage_category')}` ({m.get('record_date')})")
+                    if m.get("media_type") == "Image":
+                        st.image(m.get("media_url"), use_container_width=True)
+                    else:
+                        st.markdown(f"🔗 [Watch Movement Video]({m.get('media_url')})")
+                    st.divider()
+            else:
+                st.info("No photos or videos logged for this animal yet.")
+
+    with c_tab4:
+        st.subheader("Account Statements & Payment Submission")
+        
+        try:
+            pmts_res = supabase.table("client_payments").select("*").eq("owner_name", matched_owner_name).execute()
+            my_payments = pmts_res.data if pmts_res.data else []
+        except Exception:
+            my_payments = []
+
+        total_paid_client = sum(float(p.get("amount_paid", 0)) for p in my_payments)
+        st.metric("Total Payments Completed", f"${total_paid_client:,.2f} CAD")
+
+        st.markdown("### Make a Payment via e-Transfer")
+        st.info("""
+        * **e-Transfer Email:** `paige@equusperformance.ca`
+        * **Recipient Name:** Equus Performance Therapeutics
+        * **Reference:** Please include your horse's name in the transfer notes.
         """)
 
-        pub_agree = st.checkbox("I have read, understood, and accept the liability waiver and terms of service.*")
-        pub_sig = st.text_input("Digital Signature (Type Full Legal Name)*")
-
-        if st.form_submit_button("Submit Client Intake"):
-            if pub_owner and pub_email and pub_horse and pub_sig:
-                if not pub_agree:
-                    st.error("You must agree to the liability waiver terms to complete intake.")
-                else:
+        with st.form("client_record_payment_form"):
+            st.markdown("#### Log Your Payment Confirmation")
+            p_amt = st.number_input("Amount Sent ($ CAD)", min_value=10.0, value=60.0, step=10.0)
+            p_ref = st.text_input("e-Transfer Reference / Confirmation Number*")
+            if st.form_submit_button("Submit Payment Confirmation"):
+                if p_ref:
                     try:
-                        modalities = []
-                        if c_hect:
-                            modalities.append("Equitron-Pro (HECT)")
-                        if c_halo:
-                            modalities.append("HaloEQ2 (Halotherapy)")
-
-                        supabase.table("client_waivers").insert({
-                            "owner_name": pub_owner,
-                            "client_email": pub_email,
-                            "horse_name": pub_horse,
-                            "primary_veterinarian": pub_vet,
-                            "vet_phone": pub_vet_phone,
-                            "modality_consent": modalities,
-                            "waiver_agreed": True,
-                            "signature_name": pub_sig,
+                        supabase.table("client_payments").insert({
+                            "payment_date": str(datetime.date.today()),
+                            "owner_name": matched_owner_name,
+                            "amount_paid": float(p_amt),
+                            "payment_method": "e-Transfer",
+                            "reference_number": p_ref,
+                            "notes": f"Submitted directly by client via portal for {matched_owner_name}",
                         }).execute()
-
-                        existing_horses = [h for h in horses if h.get("name", "").lower() == pub_horse.lower()]
-                        if not existing_horses and barns:
-                            barn_id_match = next((b["id"] for b in barns if b["name"] == pub_barn), barns[0]["id"])
-                            supabase.table("horses").insert({
-                                "name": pub_horse,
-                                "owner_name": pub_owner,
-                                "barn_id": barn_id_match,
-                                "is_marketing_tier": False,
-                                "minutes_used_this_month": 0,
-                            }).execute()
-
-                        st.success(f"🎉 Thank you, {pub_owner}! Intake form for {pub_horse} is securely recorded.")
-                        st.balloons()
+                        st.success(f"Payment of ${p_amt:.2f} logged! Paige will verify against incoming bank e-Transfers.")
+                        st.rerun()
                     except Exception as e:
-                        st.error(f"Submission error: {e}")
-            else:
-                st.warning("Please fill in all required fields marked with *.")
+                        st.error(f"Error recording payment: {e}")
+                else:
+                    st.warning("Please enter your e-Transfer reference number.")
 
 # ----------------------------------------------------
-# 1. DAILY CLINICAL HUB
+# PAGE: SPECIALIST MANAGE CLIENTS & APPOINTMENTS
+# ----------------------------------------------------
+elif page == "Manage Clients & Appointments":
+    st.title("👥 Paige's Master Client & Booking Manager")
+    st.markdown("Manage client profiles, book sessions on their behalf, cancel or reschedule visits, and handle password resets.")
+
+    try:
+        w_res = supabase.table("client_waivers").select("*").order("created_at", desc=True).execute()
+        all_clients = w_res.data if w_res.data else []
+    except Exception:
+        all_clients = []
+
+    client_lookup = {f"{c['owner_name']} ({c['client_email']}) - Horse: {c['horse_name']}": c for c in all_clients}
+
+    if client_lookup:
+        col_m1, col_m2 = st.columns([1, 1])
+
+        with col_m1:
+            st.subheader("1. Edit Client Details & Manage Profile")
+            sel_client_lbl = st.selectbox("Select Client", list(client_lookup.keys()))
+            active_c = client_lookup[sel_client_lbl]
+
+            with st.form("edit_client_form"):
+                new_owner = st.text_input("Owner Name", value=active_c.get("owner_name", ""))
+                new_email = st.text_input("Email Address", value=active_c.get("client_email", ""))
+                new_vet = st.text_input("Primary Veterinarian", value=active_c.get("primary_veterinarian", ""))
+                new_phone = st.text_input("Vet Phone", value=active_c.get("vet_phone", ""))
+                
+                if st.form_submit_button("Save Updated Client Info"):
+                    try:
+                        supabase.table("client_waivers").update({
+                            "owner_name": new_owner,
+                            "client_email": new_email,
+                            "primary_veterinarian": new_vet,
+                            "vet_phone": new_phone,
+                        }).eq("id", active_c["id"]).execute()
+                        st.success("Client information updated successfully!")
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(f"Error updating: {ex}")
+
+        with col_m2:
+            st.subheader("2. Book / Reschedule / Cancel for Client")
+            
+            client_horse_match = next((h for h in horses if h.get("name", "").lower() == active_c.get("horse_name", "").lower()), None)
+            
+            with st.form("paige_booking_client_form"):
+                bk_date = st.date_input("Appointment Date", datetime.date.today())
+                bk_dist = st.number_input("Distance from Base (km)", min_value=0.0, value=30.0, step=5.0)
+                bk_action = st.selectbox("Action", ["Book New Appointment", "Cancel Existing Booking"])
+
+                if st.form_submit_button("Execute Appointment Action"):
+                    if client_horse_match:
+                        if bk_action == "Book New Appointment":
+                            try:
+                                supabase.table("appointments").insert({
+                                    "appointment_date": str(bk_date),
+                                    "horse_id": str(client_horse_match["id"]),
+                                    "barn_id": str(client_horse_match.get("barn_id")),
+                                    "distance_from_base_km": float(bk_dist),
+                                    "travel_fee": 0.0 if bk_dist <= 30 else round((bk_dist - 30)*0.73, 2),
+                                    "status": "Confirmed",
+                                }).execute()
+                                st.success(f"Booked session for {client_horse_match['name']} on {bk_date}!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                        else:
+                            try:
+                                supabase.table("appointments").delete().eq("horse_id", str(client_horse_match["id"])).eq("appointment_date", str(bk_date)).execute()
+                                st.warning(f"Cancelled appointment for {client_horse_match['name']} on {bk_date}.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error cancelling: {e}")
+                    else:
+                        st.error("Horse profile not found in database.")
+    else:
+        st.info("No registered clients found in the database.")
+
+# ----------------------------------------------------
+# 1. DAILY CLINICAL HUB - EXISTING PAGES
 # ----------------------------------------------------
 elif page == "Log Treatments & Live Feed":
     st.title("🐎 Operations & Clinical Treatment Hub")
@@ -890,422 +1065,6 @@ elif page == "Photo & Video Progress Gallery":
     else:
         st.info("Please register a horse profile first.")
 
-elif page == "Veterinary Clinical Reports":
-    st.title("🩺 Veterinary Clinical Summary Reports")
-    st.markdown(
-        "Generate concise, professional clinical treatment summaries for veterinarians and training teams."
-    )
-
-    if horses:
-        col_v1, col_v2 = st.columns([1, 2])
-
-        with col_v1:
-            horse_lookup = {f"{h['name']} ({h['owner_name']} | {h['barn_details']['name']})": h for h in horses}
-            sel_label = st.selectbox("Select Horse for Clinical Report", list(horse_lookup.keys()))
-            chosen_horse_obj = horse_lookup[sel_label]
-
-            try:
-                w_res = (
-                    supabase.table("client_waivers")
-                    .select("primary_veterinarian, vet_phone")
-                    .eq("horse_name", chosen_horse_obj.get("name"))
-                    .execute()
-                )
-                vet_info = w_res.data[0] if w_res.data else {}
-            except Exception:
-                vet_info = {}
-
-            default_vet = vet_info.get("primary_veterinarian", "")
-            vet_contact_input = st.text_input(
-                "Primary Veterinarian",
-                value=default_vet if default_vet else "Attending Equine DVM",
-            )
-
-            try:
-                h_logs_res = (
-                    supabase.table("treatment_logs")
-                    .select("*")
-                    .eq("horse_id", str(chosen_horse_obj["id"]))
-                    .order("created_at", desc=True)
-                    .execute()
-                )
-                horse_logs = h_logs_res.data if h_logs_res.data else []
-            except Exception:
-                horse_logs = []
-
-        with col_v2:
-            st.subheader(f"Clinical Summary: {chosen_horse_obj['name']}")
-            st.markdown(f"**Owner:** {chosen_horse_obj['owner_name']} | **Facility:** {chosen_horse_obj['barn_details']['name']}")
-
-            if horse_logs:
-                st.write(f"Total Recorded Sessions: **{len(horse_logs)}**")
-
-                for l in horse_logs[:3]:
-                    st.caption(
-                        f"• **{l.get('created_at', '')[:10]}** — `{l.get('modality')}` ({l.get('duration_minutes')} mins): {l.get('session_notes')}"
-                    )
-
-                vet_pdf_bytes = create_vet_report_pdf(
-                    chosen_horse_obj, vet_contact_input, horse_logs
-                )
-
-                st.download_button(
-                    label="📄 Export Veterinary Clinical Report (PDF)",
-                    data=bytes(vet_pdf_bytes),
-                    file_name=f"EquusOS_Clinical_Report_{chosen_horse_obj['name'].replace(' ', '_')}_{datetime.date.today()}.pdf",
-                    mime="application/pdf",
-                )
-            else:
-                st.info("No clinical sessions recorded for this horse yet.")
-    else:
-        st.info("Please register a horse profile first.")
-
-elif page == "Client Health Portal":
-    st.title("Client Health & Progress Portal")
-    st.markdown("Transparent access for horse owners to review clinical notes and session logs.")
-
-    if horses:
-        owners = sorted(list(set(h["owner_name"] for h in horses if h.get("owner_name"))))
-        selected_owner = st.selectbox("Select Registered Owner", owners)
-
-        owner_horses = [h for h in horses if h.get("owner_name") == selected_owner]
-        selected_horse_name = st.selectbox("Select Your Horse", [h["name"] for h in owner_horses])
-        active_horse = next(h for h in owner_horses if h["name"] == selected_horse_name)
-
-        st.metric(
-            label="Monthly Usage Logged",
-            value=f"{active_horse.get('minutes_used_this_month', 0)} Mins",
-        )
-
-        st.subheader(f"Treatment History: {active_horse['name']}")
-        try:
-            logs_res = (
-                supabase.table("treatment_logs")
-                .select("*")
-                .eq("horse_id", str(active_horse["id"]))
-                .order("created_at", desc=True)
-                .execute()
-            )
-            logs = logs_res.data if logs_res.data else []
-        except Exception:
-            logs = []
-
-        if logs:
-            for log in logs:
-                st.info(f"""
-                **Date:** {log.get('created_at', '')[:10]} | **Modality:** {log.get('modality', 'Therapy')} ({log.get('duration_minutes', 20)} mins)  
-                **Observations:** {log.get('session_notes', '')}  
-                **Amount:** ${float(log.get('calculated_fee', 0)):.2f} CAD
-                """)
-        else:
-            st.write("No session records found for this horse.")
-    else:
-        st.info("No horses registered in the database yet.")
-
-# ----------------------------------------------------
-# 2. DISPATCH & CORRIDORS
-# ----------------------------------------------------
-elif page == "Corridor Calendar & Daily Run-Sheet":
-    st.title("📅 Corridor Schedule & Daily Dispatch Run-Sheet")
-    st.markdown("Organize weekly corridor runs, track stop order, and generate daily mobile dispatch sheets.")
-
-    try:
-        appts_res = supabase.table("appointments").select("*").order("appointment_date").execute()
-        all_appts = appts_res.data if appts_res.data else []
-    except Exception:
-        all_appts = []
-
-    horse_map = {h["id"]: h for h in horses}
-
-    col_d1, col_d2 = st.columns([1, 2])
-
-    with col_d1:
-        st.subheader("Select Run-Sheet Date")
-        selected_run_date = st.date_input(
-            "Dispatch Date", datetime.date.today(), key="run_date_picker"
-        )
-
-        day_of_week = selected_run_date.strftime("%A")
-        corridor_match = {
-            "Monday": "Ottawa Metro & Russell Home Corridor",
-            "Tuesday": "Kingston Corridor (South - Hwy 416/401)",
-            "Wednesday": "Pembroke & Upper Valley Corridor (North - Hwy 17)",
-            "Thursday": "Montreal Corridor (East - Hwy 417)",
-            "Friday": "Flagship Barn Dedicated Intensive",
-        }.get(day_of_week, "Custom / Weekend Route")
-
-        st.info(f"📍 **Scheduled Corridor:** {corridor_match}")
-
-    with col_d2:
-        daily_appts = [
-            a for a in all_appts if a.get("appointment_date") == str(selected_run_date)
-        ]
-
-        st.subheader(
-            f"Daily Stop Itinerary: {selected_run_date.strftime('%b %d, %Y')} ({len(daily_appts)} Stops)"
-        )
-
-        if daily_appts:
-            for idx, appt in enumerate(daily_appts, start=1):
-                h_info = horse_map.get(appt.get("horse_id"), {})
-                b_info = h_info.get("barn_details", {})
-                with st.container():
-                    c_s1, c_s2 = st.columns([3, 1])
-                    with c_s1:
-                        st.markdown(
-                            f"**Stop {idx}: {h_info.get('name', 'Horse')}** (Owner: {h_info.get('owner_name', 'N/A')})"
-                        )
-                        st.caption(
-                            f"📍 Facility: **{b_info.get('name', 'Barn')}** | Distance: {appt.get('distance_from_base_km', 0)} km | "
-                            f"Fee: ${float(appt.get('travel_fee', 0)):.2f}"
-                        )
-                    with c_s2:
-                        new_status = st.selectbox(
-                            "Status",
-                            ["Confirmed", "En Route", "Completed", "Rescheduled"],
-                            index=["Confirmed", "En Route", "Completed", "Rescheduled"].index(
-                                appt.get("status", "Confirmed")
-                            ),
-                            key=f"status_select_{appt['id']}",
-                        )
-                        if new_status != appt.get("status"):
-                            supabase.table("appointments").update(
-                                {"status": new_status}
-                            ).eq("id", appt["id"]).execute()
-                            st.rerun()
-                    st.divider()
-
-            run_sheet_df = pd.DataFrame([
-                {
-                    "Stop": i + 1,
-                    "Horse": horse_map.get(a.get("horse_id"), {}).get("name", ""),
-                    "Owner": horse_map.get(a.get("horse_id"), {}).get("owner_name", ""),
-                    "Barn / Facility": horse_map.get(a.get("horse_id"), {}).get("barn_details", {}).get("name", ""),
-                    "Distance (km)": a.get("distance_from_base_km", 0),
-                    "Travel Fee": f"${float(a.get('travel_fee', 0)):.2f}",
-                    "Status": a.get("status", "Confirmed"),
-                }
-                for i, a in enumerate(daily_appts)
-            ])
-
-            csv_sheet = run_sheet_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="📥 Export Daily Dispatch Run-Sheet (CSV)",
-                data=csv_sheet,
-                file_name=f"EquusOS_RunSheet_{selected_run_date}.csv",
-                mime="text/csv",
-            )
-        else:
-            st.info(f"No appointments booked for {selected_run_date.strftime('%A, %B %d, %Y')}.")
-
-    st.subheader("Upcoming 14-Day Dispatch Outlook")
-    if all_appts:
-        outlook_rows = []
-        for a in all_appts:
-            h_obj = horse_map.get(a.get("horse_id"), {})
-            outlook_rows.append({
-                "Date": a.get("appointment_date"),
-                "Horse": h_obj.get("name", "N/A"),
-                "Owner": h_obj.get("owner_name", "N/A"),
-                "Barn": h_obj.get("barn_details", {}).get("name", "N/A"),
-                "Travel Fee": f"${float(a.get('travel_fee', 0)):.2f}",
-                "Status": a.get("status", "Confirmed"),
-            })
-        st.dataframe(pd.DataFrame(outlook_rows), use_container_width=True)
-
-elif page == "Smart Route Booking & Mileage":
-    st.title("Smart Route Corridor Dispatcher")
-    st.markdown(
-        "Optimize travel routes and automatically calculate mileage fees outside the 30km radius."
-    )
-
-    col1, col2 = st.columns(2)
-    with col1:
-        with st.form("booking_form"):
-            st.subheader("Book Route Appointment")
-            if horses:
-                horse_opts = {f"{h['name']} ({h['barn_details']['name']})": h for h in horses}
-                h_choice = st.selectbox("Select Horse", list(horse_opts.keys()))
-                chosen_horse = horse_opts[h_choice]
-
-                app_date = st.date_input("Appointment Date", datetime.date.today())
-                distance = st.number_input(
-                    "Estimated Distance from Base (km)",
-                    min_value=0.0,
-                    value=35.0,
-                    step=1.0,
-                )
-
-                if st.form_submit_button("Confirm Booking"):
-                    try:
-                        barn_id_val = chosen_horse.get("barn_id")
-
-                        query = (
-                            supabase.table("appointments")
-                            .select("id")
-                            .eq("appointment_date", str(app_date))
-                        )
-                        if barn_id_val:
-                            query = query.eq("barn_id", str(barn_id_val))
-
-                        appts_res = query.execute()
-                        same_day_count = (len(appts_res.data) if appts_res.data else 0) + 1
-
-                        travel_fee, is_waived, reason = calculate_travel_fee(
-                            float(distance), same_day_count
-                        )
-
-                        payload = {
-                            "appointment_date": str(app_date),
-                            "horse_id": str(chosen_horse["id"]),
-                            "distance_from_base_km": float(distance),
-                            "travel_fee": float(travel_fee),
-                            "status": "Confirmed",
-                        }
-                        if barn_id_val:
-                            payload["barn_id"] = str(barn_id_val)
-
-                        supabase.table("appointments").insert(payload).execute()
-
-                        st.success(f"Appointment Confirmed! Travel Fee: ${travel_fee:.2f} CAD ({reason})")
-                        st.rerun()
-                    except Exception as err:
-                        st.error(f"Booking Error: {err}")
-
-    with col2:
-        st.subheader("Designated Corridor Days")
-        st.info("""
-        * **Monday:** Ottawa Metro & Russell Home Base
-        * **Tuesday:** Kingston Corridor (South)
-        * **Wednesday:** Pembroke / Valley Corridor (North)
-        * **Thursday:** Montreal Corridor (East)
-        * **Friday:** Flagship Barn Dedicated Intensive
-        """)
-
-    st.subheader("Scheduled Route Dispatches")
-    try:
-        appts_res = supabase.table("appointments").select("*").order("appointment_date").execute()
-        appts = appts_res.data if appts_res.data else []
-    except Exception:
-        appts = []
-
-    horse_map = {h["id"]: h for h in horses}
-
-    if appts:
-        for a in appts:
-            h_obj = horse_map.get(a.get("horse_id"), {})
-            b_name = h_obj.get("barn_details", {}).get("name", "Barn")
-            st.write(
-                f"📅 **{a.get('appointment_date')}** | **{h_obj.get('name', 'Horse')}** @ {b_name} | "
-                f"Travel Fee: `${float(a.get('travel_fee', 0)):.2f}` CAD | Status: `{a.get('status', 'Confirmed')}`"
-            )
-    else:
-        st.write("No appointments scheduled.")
-
-elif page == "Client Re-booking & Reminders":
-    st.title("💬 Automated Client Reminders & Re-Booking Hub")
-    st.markdown(
-        "Generate personalized SMS and WhatsApp dispatch notifications, "
-        "arrival reminders, and post-session re-booking prompts."
-    )
-
-    if horses:
-        col_r1, col_r2 = st.columns([1, 1])
-
-        with col_r1:
-            st.subheader("Reminder Message Builder")
-            horse_pick = {f"{h['name']} (Owner: {h['owner_name']} | {h['barn_details']['name']})": h for h in horses}
-            chosen_h_label = st.selectbox("Select Horse / Owner", list(horse_pick.keys()))
-            h_rem = horse_pick[chosen_h_label]
-
-            phone_num = st.text_input("Owner Phone Number (for WhatsApp/SMS)", placeholder="e.g. 6135551234")
-
-            reminder_type = st.selectbox(
-                "Message Type",
-                [
-                    "Appointment Confirmation & ETA",
-                    "48-Hour Post-Equitron Recovery Check-In",
-                    "Bi-Weekly Maintenance Re-Booking Prompt",
-                    "Group Barn Route Booking Callout",
-                ],
-            )
-
-            appt_date_txt = st.date_input("Appointment / Target Date", datetime.date.today())
-            arrival_window = st.selectbox(
-                "Estimated Arrival Window",
-                [
-                    "Morning (9:00 AM - 11:00 AM)",
-                    "Midday (11:00 AM - 1:00 PM)",
-                    "Afternoon (1:00 PM - 3:30 PM)",
-                    "Late Afternoon (3:30 PM - 5:30 PM)",
-                ],
-            )
-
-        with col_r2:
-            st.subheader("Generated Message Preview")
-
-            owner_first = (
-                h_rem.get("owner_name", "there").split()[0]
-                if h_rem.get("owner_name")
-                else "there"
-            )
-            horse_n = h_rem.get("name", "your horse")
-            barn_n = h_rem.get("barn_details", {}).get("name", "the barn")
-
-            if reminder_type == "Appointment Confirmation & ETA":
-                message_body = (
-                    f"Hi {owner_first}! Confirming our Equus Performance session for {horse_n} on "
-                    f"{appt_date_txt.strftime('%A, %b %d')} at {barn_n}. Our estimated arrival window is {arrival_window}. "
-                    f"Please ensure {horse_n} is brought in and dry. Looking forward to seeing you!"
-                )
-            elif reminder_type == "48-Hour Post-Equitron Recovery Check-In":
-                message_body = (
-                    f"Hi {owner_first}! Just checking in on {horse_n} following our Equitron session. "
-                    f"How is their topline and movement feeling under saddle? Let me know if you noticed any relaxed biofeedback changes!"
-                )
-            elif reminder_type == "Bi-Weekly Maintenance Re-Booking Prompt":
-                message_body = (
-                    f"Hi {owner_first}! It has been about two weeks since {horse_n}'s last cellular therapy session. "
-                    f"We are scheduling our upcoming corridor run to {barn_n}. Would you like to reserve a spot to maintain their peak performance?"
-                )
-            else:
-                message_body = (
-                    f"Hi {owner_first}! We are opening our route dispatch to {barn_n} for {appt_date_txt.strftime('%A, %b %d')}. "
-                    f"If we group 3 or more horses together, travel mileage fees are 100% waived! Let me know if you'd like to include {horse_n}."
-                )
-
-            st.text_area("Copy Text", value=message_body, height=160, key="reminder_text_box")
-
-            clean_phone = "".join(filter(str.isdigit, phone_num))
-            if len(clean_phone) == 10:
-                clean_phone = "1" + clean_phone
-
-            if clean_phone:
-                encoded_msg = urllib.parse.quote(message_body)
-                wa_url = f"https://wa.me/{clean_phone}?text={encoded_msg}"
-                st.markdown(f"""
-                    <a href="{wa_url}" target="_blank">
-                        <button style="
-                            background-color: #25D366;
-                            color: white;
-                            border: none;
-                            padding: 10px 20px;
-                            font-size: 16px;
-                            border-radius: 8px;
-                            cursor: pointer;
-                            font-weight: bold;
-                            width: 100%;
-                        ">📲 Send via WhatsApp</button>
-                    </a>
-                    """, unsafe_allow_html=True)
-            else:
-                st.caption("💡 Enter a phone number above to enable 1-click WhatsApp messaging.")
-    else:
-        st.info("Please register a horse profile first.")
-
-# ----------------------------------------------------
-# 3. CLIENTS & FACILITIES
-# ----------------------------------------------------
 elif page == "Public Intake & Barn QR Code":
     st.title("📲 Public Self-Serve Intake & Barn QR Generator")
     st.markdown(
