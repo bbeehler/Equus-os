@@ -347,38 +347,175 @@ def create_vet_report_pdf(horse_obj, vet_name, clinical_logs):
 
 
 # ----------------------------------------------------
-# 4. Sidebar Navigation
+# 4. Sidebar Navigation & URL Mode Detection
 # ----------------------------------------------------
-st.sidebar.title("🐎 EquusOS")
-st.sidebar.caption("Equus Performance Therapeutics")
-page = st.sidebar.radio(
-    "Navigation",
-    [
-        "Operations & Treatment Feed",
-        "Clinical Progression Tracker",
-        "Photo & Video Progress Gallery",
-        "Pre-Paid Packages & Credits",
-        "Facility Retainer Reconciler",
-        "Smart Route Booking",
-        "Corridor Calendar & Run-Sheet",
-        "Client Re-booking & Reminders",
-        "Client Intake & Waiver",
-        "Client Health Portal",
-        "Monthly Invoicing & Exports",
-        "Email Invoice Dispatcher",
-        "Payments & Accounts Receivable",
-        "Veterinary Clinical Reports",
-        "Corridor Travel & Expense Tracker",
-        "Executive P&L Snapshot",
-    ],
-)
-
 barns, horses, barn_map = get_data_maps()
+
+# Check for public self-serve mode in URL query params: ?mode=intake
+query_params = st.query_params
+is_public_intake = query_params.get("mode") == "intake"
+
+if not is_public_intake:
+    st.sidebar.title("🐎 EquusOS")
+    st.sidebar.caption("Equus Performance Therapeutics")
+    page = st.sidebar.radio(
+        "Navigation",
+        [
+            "Operations & Treatment Feed",
+            "Clinical Progression Tracker",
+            "Photo & Video Progress Gallery",
+            "Pre-Paid Packages & Credits",
+            "Facility Retainer Reconciler",
+            "Smart Route Booking",
+            "Corridor Calendar & Run-Sheet",
+            "Client Re-booking & Reminders",
+            "Public Intake & QR Generator",
+            "Client Intake & Waiver",
+            "Client Health Portal",
+            "Monthly Invoicing & Exports",
+            "Email Invoice Dispatcher",
+            "Payments & Accounts Receivable",
+            "Veterinary Clinical Reports",
+            "Corridor Travel & Expense Tracker",
+            "Executive P&L Snapshot",
+        ],
+    )
+else:
+    page = "Public Intake Form"
+
+# ----------------------------------------------------
+# Public Self-Serve Intake Page
+# ----------------------------------------------------
+if page == "Public Intake Form":
+    st.title("🐎 Equus Performance Therapeutics")
+    st.subheader("Client Onboarding & Liability Waiver")
+    st.caption("Please complete this intake form prior to your horse's therapy session.")
+
+    with st.form("public_waiver_form"):
+        st.markdown("### 1. Owner & Patient Profile")
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            pub_owner = st.text_input("Your Full Name (Owner / Agent)*")
+            pub_email = st.text_input("Email Address*")
+            pub_phone = st.text_input("Mobile Phone Number*")
+        with col_p2:
+            pub_horse = st.text_input("Horse Name (Show / Barn Name)*")
+            barn_names = [b["name"] for b in barns] if barns else ["Private / Home Facility"]
+            pub_barn = st.selectbox("Stabling Facility / Barn*", barn_names)
+            pub_discipline = st.text_input("Primary Discipline / Breed", placeholder="e.g. Hunter/Jumper, Dressage, Eventing")
+
+        st.markdown("### 2. Veterinarian & Medical Profile")
+        col_v1, col_v2 = st.columns(2)
+        with col_v1:
+            pub_vet = st.text_input("Primary Veterinarian Name", placeholder="e.g. Dr. Smith (Ottawa Equine)")
+        with col_v2:
+            pub_vet_phone = st.text_input("Veterinarian Phone Number")
+
+        pub_history = st.text_area(
+            "Current Areas of Discomfort, Stiffness, or Injury History",
+            placeholder="e.g. Tight sacroiliac, recovery from suspensory strain, seasonal cough..."
+        )
+
+        st.markdown("### 3. Modality Authorization")
+        c_hect = st.checkbox("High-Energy Cell Treatment (Equitron-Pro / HECT)", value=True)
+        c_halo = st.checkbox("Clinical Dry Aerosol Halotherapy (HaloEQ2)", value=True)
+
+        st.markdown("### 4. Legal Liability Release & Informed Consent")
+        st.markdown("""
+        > **Scope of Practice & Acknowledgment:**  
+        > Equus Performance Therapeutics provides non-invasive complementary equine wellness, cellular regeneration (HECT), and respiratory salt therapy (Halotherapy). These modalities do not constitute veterinary medicine, surgery, or pharmacological prescribing. The owner confirms the animal is free of acute contagious diseases and authorizes Paige Cummings to administer non-invasive sessions.
+        """)
+
+        pub_agree = st.checkbox("I have read, understood, and accept the liability waiver and terms of service.*")
+        pub_sig = st.text_input("Digital Signature (Type Full Legal Name)*")
+
+        if st.form_submit_button("Submit Client Intake"):
+            if pub_owner and pub_email and pub_horse and pub_sig:
+                if not pub_agree:
+                    st.error("You must agree to the liability waiver terms to complete intake.")
+                else:
+                    try:
+                        modalities = []
+                        if c_hect:
+                            modalities.append("Equitron-Pro (HECT)")
+                        if c_halo:
+                            modalities.append("HaloEQ2 (Halotherapy)")
+
+                        supabase.table("client_waivers").insert({
+                            "owner_name": pub_owner,
+                            "client_email": pub_email,
+                            "horse_name": pub_horse,
+                            "primary_veterinarian": pub_vet,
+                            "vet_phone": pub_vet_phone,
+                            "modality_consent": modalities,
+                            "waiver_agreed": True,
+                            "signature_name": pub_sig,
+                        }).execute()
+
+                        existing_horses = [h for h in horses if h.get("name", "").lower() == pub_horse.lower()]
+                        if not existing_horses and barns:
+                            barn_id_match = next((b["id"] for b in barns if b["name"] == pub_barn), barns[0]["id"])
+                            supabase.table("horses").insert({
+                                "name": pub_horse,
+                                "owner_name": pub_owner,
+                                "barn_id": barn_id_match,
+                                "is_marketing_tier": False,
+                                "minutes_used_this_month": 0,
+                            }).execute()
+
+                        st.success(f"🎉 Thank you, {pub_owner}! Intake form for {pub_horse} is securely recorded.")
+                        st.balloons()
+                    except Exception as e:
+                        st.error(f"Submission error: {e}")
+            else:
+                st.warning("Please fill in all required fields marked with *.")
+
+# ----------------------------------------------------
+# Page: Public Intake & QR Generator
+# ----------------------------------------------------
+elif page == "Public Intake & QR Generator":
+    st.title("📲 Public Self-Serve Intake & Barn QR Generator")
+    st.markdown(
+        "Generate printable QR codes and shareable onboarding links for horse owners "
+        "to complete their liability waiver on their smartphones before appointments."
+    )
+
+    col_q1, col_q2 = st.columns([1, 1])
+
+    with col_q1:
+        st.subheader("Generate Barn QR Code")
+        app_base_url = st.text_input(
+            "Your Streamlit App URL",
+            value="https://equusos.streamlit.app",
+            help="Replace with your live Streamlit Cloud domain"
+        )
+        intake_url = f"{app_base_url.rstrip('/')}/?mode=intake"
+
+        st.info(f"🔗 **Public Intake URL:** `{intake_url}`")
+
+        encoded_url = urllib.parse.quote(intake_url)
+        qr_image_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={encoded_url}&bgcolor=ffffff&color=1e293b&margin=10"
+
+        st.image(qr_image_url, caption="Scan with any smartphone camera to open intake form", width=250)
+
+    with col_q2:
+        st.subheader("Printable Barn Notice Preview")
+        st.markdown(f"""
+        <div style="border: 2px solid #334155; border-radius: 12px; padding: 24px; text-align: center; background-color: #f8fafc; color: #0f172a;">
+            <h2 style="margin: 0; color: #0f172a;">🐎 EQUUS PERFORMANCE</h2>
+            <p style="margin: 4px 0 16px 0; font-size: 14px; color: #64748b;">CELLULAR REGENERATION & HALOTHERAPY</p>
+            <hr style="border: 0; height: 1px; background: #cbd5e1; margin-bottom: 16px;">
+            <p style="font-weight: bold; margin-bottom: 12px;">Scan to Complete Pre-Session Intake & Waiver</p>
+            <img src="{qr_image_url}" width="180" style="border-radius: 8px; margin-bottom: 12px;"/>
+            <p style="font-size: 12px; color: #475569;">Or visit: <br><code>{intake_url}</code></p>
+            <p style="font-size: 11px; color: #94a3b8; margin-top: 12px;">Equus Performance Therapeutics | Paige Cummings</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ----------------------------------------------------
 # Page 1: Operations & Treatment Feed
 # ----------------------------------------------------
-if page == "Operations & Treatment Feed":
+elif page == "Operations & Treatment Feed":
     st.title("Operations & Clinical Hub")
     st.markdown("Log sessions and manage horse profiles across regional facilities.")
 
