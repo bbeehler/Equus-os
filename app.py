@@ -14,7 +14,7 @@ from supabase import Client, create_client
 # ----------------------------------------------------
 # 1. Configuration & Supabase Connection
 # ----------------------------------------------------
-st.set_page_config(page_title="EquusOS Hub", page_icon="🐎", layout="wide")
+st.set_page_config(page_title="Equus Performance Therapeutics", page_icon="🐎", layout="wide")
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -37,29 +37,27 @@ def hash_password(password: str) -> str:
     return hashlib.sha256((password + salt).encode("utf-8")).hexdigest()
 
 
-def authenticate_db_user(email: str, password: str, required_role: str = None):
-    """Checks credentials against the app_users database table."""
+def authenticate_db_user(email: str, password: str):
+    """Universal authentication against the app_users table for all roles."""
     try:
+        clean_email = email.strip().lower()
         res = (
             supabase.table("app_users")
             .select("*")
-            .eq("email", email.strip().lower())
+            .eq("email", clean_email)
             .execute()
         )
         users = res.data if res.data else []
         if not users:
-            return None, "No account found with this email."
+            return None, "No account found with this email address."
 
         user = users[0]
         if user.get("status") == "suspended":
-            return None, "This account is suspended. Please contact Paige."
+            return None, "This account is currently suspended. Please contact Paige directly."
 
         pwd_hash = hash_password(password)
         if user.get("password_hash") != pwd_hash:
             return None, "Incorrect password. Please try again."
-
-        if required_role and user.get("role") != required_role:
-            return None, f"Access restricted. This login is for {required_role}s only."
 
         return user, "Success"
     except Exception as e:
@@ -67,12 +65,12 @@ def authenticate_db_user(email: str, password: str, required_role: str = None):
 
 
 def register_db_user(email: str, password: str, full_name: str, role: str = "Client", phone: str = ""):
-    """Registers a new user in the app_users table."""
+    """Registers a new client in the app_users table."""
     try:
         clean_email = email.strip().lower()
         check = supabase.table("app_users").select("id").eq("email", clean_email).execute()
         if check.data and len(check.data) > 0:
-            return False, "An account with this email already exists."
+            return False, "An account with this email already exists. Please log in."
 
         pwd_hash = hash_password(password)
         payload = {
@@ -422,7 +420,7 @@ def create_vet_report_pdf(horse_obj, vet_name, clinical_logs):
 
 
 # ----------------------------------------------------
-# 5. Session State & Database Landing Login
+# 5. Session State & Public Marketing Landing
 # ----------------------------------------------------
 barns, horses, barn_map = get_data_maps()
 
@@ -433,124 +431,139 @@ if "auth_role" not in st.session_state:
 if "auth_name" not in st.session_state:
     st.session_state["auth_name"] = ""
 
-# ----------------------------------------------------
-# DATABASE-DRIVEN FRONT-END LANDING & LOGIN GATE
-# ----------------------------------------------------
+# ====================================================
+# MARKETING LANDING PAGE & UNIVERSAL LOGIN GATE
+# ====================================================
 if st.session_state["auth_user"] is None:
     st.markdown("""
-    <div style="text-align: center; padding: 24px 0 16px 0;">
-        <h1 style="font-size: 3rem; margin-bottom: 0;">🐎 EQUUS PERFORMANCE</h1>
-        <p style="font-size: 1.2rem; color: #64748b; margin-top: 4px;">High-Energy Cellular Bio-Stimulation & Clinical Salt Halotherapy</p>
+    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 36px 24px; border-radius: 16px; color: white; text-align: center; margin-bottom: 24px;">
+        <h1 style="font-size: 2.8rem; margin: 0; color: #f8fafc; letter-spacing: -0.5px;">🐎 EQUUS PERFORMANCE THERAPEUTICS</h1>
+        <p style="font-size: 1.25rem; color: #94a3b8; margin: 8px 0 16px 0; font-weight: 300;">Advanced Cellular Bio-Stimulation & Clinical Airway Halotherapy</p>
+        <div style="display: flex; justify-content: center; gap: 12px; flex-wrap: wrap;">
+            <span style="background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 20px; font-size: 0.9rem;">📍 Russell & Ottawa Valley</span>
+            <span style="background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 20px; font-size: 0.9rem;">⚡ High-Energy Cell Treatment (HECT)</span>
+            <span style="background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 20px; font-size: 0.9rem;">💨 Micro-Particle Halotherapy</span>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-    landing_tab1, landing_tab2, landing_tab3 = st.tabs(["🔐 Client Member Portal Login", "➕ New Client Registration & Waiver", "👑 Specialist Sign-In (Paige)"])
+    landing_col_left, landing_col_right = st.columns([3, 2])
 
-    # TAB 1: CLIENT DATABASE LOGIN
-    with landing_tab1:
-        col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
-        with col_l2:
-            st.subheader("Client Portal Login")
-            st.caption("Sign in to your client account using your registered email and password.")
+    with landing_col_left:
+        st.markdown("### 🌟 Specialized Equine Therapy Modalities")
+        
+        m_col1, m_col2 = st.columns(2)
+        with m_col1:
+            st.markdown("""
+            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; height: 100%;">
+                <h4 style="margin-top: 0; color: #0284c7;">⚡ Equitron-Pro (HECT)</h4>
+                <p style="font-size: 0.9rem; color: #475569; line-height: 1.5;">
+                    High-Energy Cell Treatment pulses bio-electromagnetic energy deep into cellular tissue, restoring cellular resting potential up to 20 cm deep without medication or sedation.
+                </p>
+                <ul style="font-size: 0.85rem; color: #334155; padding-left: 18px;">
+                    <li>Relieves lumbar, SI & top-line tension</li>
+                    <li>Accelerates tendon & suspensory repair</li>
+                    <li>Sore-free, non-invasive biofeedback scan</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
 
-            with st.form("client_login_form"):
-                c_email = st.text_input("Registered Email Address", placeholder="owner@barn.ca")
-                c_pwd = st.text_input("Password", type="password", placeholder="••••••••")
+        with m_col2:
+            st.markdown("""
+            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; height: 100%;">
+                <h4 style="margin-top: 0; color: #0d9488;">💨 HaloEQ2 (Halotherapy)</h4>
+                <p style="font-size: 0.9rem; color: #475569; line-height: 1.5;">
+                    Medical-grade dry aerosol salt halotherapy clears the deepest pulmonary bronchioles, flushing mucus, environmental allergens, and arena dust.
+                </p>
+                <ul style="font-size: 0.85rem; color: #334155; padding-left: 18px;">
+                    <li>Anti-bacterial & anti-inflammatory airway flush</li>
+                    <li>Enhances oxygenation & stamina in competition</li>
+                    <li>Rapid post-trailering respiratory recovery</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
 
-                if st.form_submit_button("Sign In to Member Portal", use_container_width=True):
-                    if c_email and c_pwd:
-                        user_obj, msg = authenticate_db_user(c_email, c_pwd, required_role="Client")
+        st.markdown("<div style='margin-top: 20px;'></div>", unsafe_allow_html=True)
+        st.markdown("### 🗺️ Designated Regional Corridor Routes")
+        st.markdown("""
+        * **Monday:** Ottawa Metro & Russell Home Corridor
+        * **Tuesday:** Kingston Corridor *(South via Hwy 416/401)*
+        * **Wednesday:** Pembroke & Upper Ottawa Valley *(North via Hwy 17)*
+        * **Thursday:** Montreal Corridor *(East via Hwy 417)*
+        * **Friday:** Flagship Partner Facilities Dedicated Intensive
+        """)
+
+    with landing_col_right:
+        st.markdown("### 🔐 Member & Specialist Portal")
+        portal_tabs = st.tabs(["Universal Sign-In", "New Client Registration"])
+
+        with portal_tabs[0]:
+            st.caption("Sign in with your email to access your dashboard, horses, corridor schedule, or admin tools.")
+            with st.form("universal_login_form"):
+                u_email = st.text_input("Email Address", placeholder="name@domain.ca")
+                u_pwd = st.text_input("Password", type="password", placeholder="••••••••")
+
+                if st.form_submit_button("Sign In to EquusOS", use_container_width=True):
+                    if u_email and u_pwd:
+                        user_obj, msg = authenticate_db_user(u_email, u_pwd)
                         if user_obj:
                             st.session_state["auth_user"] = user_obj.get("email")
-                            st.session_state["auth_role"] = "Client"
+                            st.session_state["auth_role"] = user_obj.get("role", "Client")
                             st.session_state["auth_name"] = user_obj.get("full_name")
-                            st.success(f"Welcome back, {user_obj.get('full_name')}!")
+                            st.success(f"Welcome, {user_obj.get('full_name')}!")
                             st.rerun()
                         else:
                             st.error(msg)
                     else:
                         st.warning("Please enter your email and password.")
 
-            with st.expander("Forgot / Reset Password?"):
-                with st.form("client_pwd_reset_req"):
-                    r_email = st.text_input("Your Account Email")
-                    r_new_pwd = st.text_input("New Desired Password", type="password")
-                    if st.form_submit_button("Reset Password"):
-                        if r_email and r_new_pwd:
-                            ok, r_msg = reset_user_password_db(r_email, r_new_pwd)
+            with st.expander("Reset Password"):
+                with st.form("universal_pwd_reset"):
+                    r_email = st.text_input("Registered Email")
+                    r_pwd = st.text_input("New Password", type="password")
+                    if st.form_submit_button("Update Password"):
+                        if r_email and r_pwd:
+                            ok, r_msg = reset_user_password_db(r_email, r_pwd)
                             if ok:
                                 st.success(r_msg)
                             else:
                                 st.error(r_msg)
                         else:
-                            st.warning("Please fill in email and new password.")
+                            st.warning("Please enter your email and new password.")
 
-    # TAB 2: NEW CLIENT REGISTRATION + ONBOARDING WAIVER
-    with landing_tab2:
-        st.subheader("Create Client Account & Sign Liability Waiver")
-        st.caption("Register your account and horse profile in the Equus database.")
-
-        with st.form("public_registration_form"):
-            st.markdown("### 1. Account Credentials & Owner Info")
-            col_p1, col_p2 = st.columns(2)
-            with col_p1:
-                reg_name = st.text_input("Full Name (Owner / Agent)*")
-                reg_email = st.text_input("Email Address (Your Portal Username)*")
-                reg_pwd = st.text_input("Create Account Password*", type="password")
-            with col_p2:
-                reg_phone = st.text_input("Mobile Phone Number*")
+        with portal_tabs[1]:
+            st.caption("Register your horse and execute your intake liability waiver.")
+            with st.form("landing_signup_form"):
+                reg_name = st.text_input("Your Full Name (Owner / Agent)*")
+                reg_email = st.text_input("Email Address (Used for Login)*")
+                reg_pwd = st.text_input("Create Password*", type="password")
+                reg_phone = st.text_input("Mobile Phone*")
                 reg_horse = st.text_input("Horse Name (Show / Barn Name)*")
-                barn_names = [b["name"] for b in barns] if barns else ["Private / Home Facility"]
+                barn_names = [b["name"] for b in barns] if barns else ["Private Facility"]
                 reg_barn = st.selectbox("Stabling Facility / Barn*", barn_names)
-
-            st.markdown("### 2. Medical & Primary Veterinarian Details")
-            col_v1, col_v2 = st.columns(2)
-            with col_v1:
                 reg_vet = st.text_input("Primary Veterinarian Name", placeholder="e.g. Dr. Smith")
-            with col_v2:
-                reg_vet_phone = st.text_input("Veterinarian Phone Number")
+                reg_notes = st.text_area("Discomfort / Injury History / Notes for Paige")
+                reg_agree = st.checkbox("I agree to the liability waiver & complementary care terms.*")
+                reg_sig = st.text_input("Digital Signature (Full Legal Name)*")
 
-            reg_notes = st.text_area("Medical History / Current Stiffness / Notes for Paige")
+                if st.form_submit_button("Complete Registration & Enter", use_container_width=True):
+                    if reg_name and reg_email and reg_pwd and reg_horse and reg_sig:
+                        if not reg_agree:
+                            st.error("Please accept the waiver terms.")
+                        else:
+                            ok, msg = register_db_user(reg_email, reg_pwd, reg_name, role="Client", phone=reg_phone)
+                            if ok:
+                                supabase.table("client_waivers").insert({
+                                    "owner_name": reg_name,
+                                    "client_email": reg_email.strip().lower(),
+                                    "horse_name": reg_horse,
+                                    "primary_veterinarian": reg_vet,
+                                    "modality_consent": ["Equitron-Pro (HECT)", "HaloEQ2 (Halotherapy)"],
+                                    "waiver_agreed": True,
+                                    "signature_name": reg_sig,
+                                }).execute()
 
-            st.markdown("### 3. Modality Authorization & Informed Consent")
-            c_hect = st.checkbox("High-Energy Cell Treatment (Equitron-Pro / HECT)", value=True)
-            c_halo = st.checkbox("Clinical Dry Aerosol Halotherapy (HaloEQ2)", value=True)
-
-            st.markdown("""
-            > **Scope of Practice & Liability Release:**  
-            > Equus Performance Therapeutics provides complementary non-invasive wellness, cellular regeneration (HECT), and respiratory salt therapy. The owner releases Paige Cummings from liability and confirms the horse is free of acute infectious diseases.
-            """)
-
-            reg_agree = st.checkbox("I agree to the terms of service and liability waiver.*")
-            reg_sig = st.text_input("Digital Signature (Type Full Legal Name)*")
-
-            if st.form_submit_button("Complete Registration & Enter Portal", use_container_width=True):
-                if reg_name and reg_email and reg_pwd and reg_horse and reg_sig:
-                    if not reg_agree:
-                        st.error("You must accept the waiver terms to complete registration.")
-                    else:
-                        ok, msg = register_db_user(reg_email, reg_pwd, reg_name, role="Client", phone=reg_phone)
-                        if ok:
-                            modalities = []
-                            if c_hect:
-                                modalities.append("Equitron-Pro (HECT)")
-                            if c_halo:
-                                modalities.append("HaloEQ2 (Halotherapy)")
-
-                            supabase.table("client_waivers").insert({
-                                "owner_name": reg_name,
-                                "client_email": reg_email.strip().lower(),
-                                "horse_name": reg_horse,
-                                "primary_veterinarian": reg_vet,
-                                "vet_phone": reg_vet_phone,
-                                "modality_consent": modalities,
-                                "waiver_agreed": True,
-                                "signature_name": reg_sig,
-                            }).execute()
-
-                            existing_h = [h for h in horses if h.get("name", "").lower() == reg_horse.lower()]
-                            if not existing_h and barns:
-                                barn_id_match = next((b["id"] for b in barns if b["name"] == reg_barn), barns[0]["id"])
+                                barn_id_match = next((b["id"] for b in barns if b["name"] == reg_barn), barns[0]["id"] if barns else None)
                                 supabase.table("horses").insert({
                                     "name": reg_horse,
                                     "owner_name": reg_name,
@@ -559,40 +572,15 @@ if st.session_state["auth_user"] is None:
                                     "minutes_used_this_month": 0,
                                 }).execute()
 
-                            st.session_state["auth_user"] = reg_email.strip().lower()
-                            st.session_state["auth_role"] = "Client"
-                            st.session_state["auth_name"] = reg_name
-                            st.success(f"🎉 Account created! Welcome, {reg_name}!")
-                            st.rerun()
-                        else:
-                            st.error(msg)
-                else:
-                    st.warning("Please fill in all required fields marked with *.")
-
-    # TAB 3: SPECIALIST / ADMIN DATABASE LOGIN
-    with landing_tab3:
-        col_a1, col_a2, col_a3 = st.columns([1, 2, 1])
-        with col_a2:
-            st.subheader("👑 Specialist Sign-In (Paige)")
-            st.caption("Secure admin login stored in your Supabase app_users table.")
-
-            with st.form("admin_login_form"):
-                admin_email = st.text_input("Specialist Email", placeholder="paige@equusperformance.ca")
-                admin_pass = st.text_input("Admin Password", type="password")
-
-                if st.form_submit_button("Sign In as Administrator", use_container_width=True):
-                    if admin_email and admin_pass:
-                        admin_user, msg = authenticate_db_user(admin_email, admin_pass, required_role="Admin")
-                        if admin_user:
-                            st.session_state["auth_user"] = admin_user.get("email")
-                            st.session_state["auth_role"] = "Admin"
-                            st.session_state["auth_name"] = admin_user.get("full_name", "Paige Cummings")
-                            st.success("Authenticated as Administrator!")
-                            st.rerun()
-                        else:
-                            st.error(msg)
+                                st.session_state["auth_user"] = reg_email.strip().lower()
+                                st.session_state["auth_role"] = "Client"
+                                st.session_state["auth_name"] = reg_name
+                                st.success(f"Account created! Welcome, {reg_name}!")
+                                st.rerun()
+                            else:
+                                st.error(msg)
                     else:
-                        st.warning("Please provide your admin email and password.")
+                        st.warning("Please fill in all required fields.")
 
     st.stop()
 
