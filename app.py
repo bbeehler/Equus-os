@@ -32,13 +32,11 @@ supabase = init_supabase()
 # 2. Secure Hashing & Auth Database Helpers
 # ----------------------------------------------------
 def hash_password(password: str) -> str:
-    """Generates a secure SHA-256 hash with a static salt for DB storage."""
     salt = "equus_perf_2026_salt"
     return hashlib.sha256((password + salt).encode("utf-8")).hexdigest()
 
 
 def authenticate_db_user(email: str, password: str):
-    """Universal authentication against the app_users table for all roles."""
     try:
         clean_email = email.strip().lower()
         res = (
@@ -65,7 +63,6 @@ def authenticate_db_user(email: str, password: str):
 
 
 def register_db_user(email: str, password: str, full_name: str, role: str = "Client", phone: str = ""):
-    """Registers a new client in the app_users table."""
     try:
         clean_email = email.strip().lower()
         check = supabase.table("app_users").select("id").eq("email", clean_email).execute()
@@ -88,7 +85,6 @@ def register_db_user(email: str, password: str, full_name: str, role: str = "Cli
 
 
 def reset_user_password_db(email: str, new_password: str):
-    """Updates password hash for a given user email in database."""
     try:
         clean_email = email.strip().lower()
         pwd_hash = hash_password(new_password)
@@ -101,7 +97,59 @@ def reset_user_password_db(email: str, new_password: str):
 
 
 # ----------------------------------------------------
-# 3. Business Logic Helpers
+# 3. Dynamic CMS Content Helper
+# ----------------------------------------------------
+def get_site_content():
+    """Fetches editable content from site_content table with default fallbacks."""
+    default_content = {
+        "hero_title": "🐎 EQUUS PERFORMANCE THERAPEUTICS",
+        "hero_subtitle": "Advanced Cellular Bio-Stimulation & Clinical Airway Halotherapy",
+        "hero_badge_1": "📍 Russell & Ottawa Valley",
+        "hero_badge_2": "⚡ High-Energy Cell Treatment (HECT)",
+        "hero_badge_3": "💨 Micro-Particle Halotherapy",
+        "hect_title": "⚡ Equitron-Pro (HECT)",
+        "hect_price": "$60 CAD / 20-min session ($2.00/min)",
+        "hect_desc": "High-Energy Cell Treatment pulses bio-electromagnetic energy deep into cellular tissue, restoring cellular resting potential up to 20 cm deep without medication or sedation.",
+        "hect_bullet_1": "Relieves lumbar, SI & top-line muscular tension",
+        "hect_bullet_2": "Accelerates tendon, ligament & suspensory repair",
+        "hect_bullet_3": "Sore-free, non-invasive biofeedback scan",
+        "halo_title": "💨 HaloEQ2 (Halotherapy)",
+        "halo_price": "$45 CAD / session (Custom Stabling Blocks)",
+        "halo_desc": "Medical-grade dry aerosol salt halotherapy clears the deepest pulmonary bronchioles, flushing mucus, environmental allergens, and arena dust.",
+        "halo_bullet_1": "Anti-bacterial & anti-inflammatory airway flush",
+        "halo_bullet_2": "Enhances oxygenation & stamina in competition",
+        "halo_bullet_3": "Rapid post-trailering respiratory recovery",
+        "combo_title": "⭐ Peak Performance Combo (HECT + Halo)",
+        "combo_price": "$95 CAD / combined package",
+        "corridor_routes": """* **Monday:** Ottawa Metro & Russell Home Corridor
+* **Tuesday:** Kingston Corridor *(South via Hwy 416/401)*
+* **Wednesday:** Pembroke & Upper Ottawa Valley *(North via Hwy 17)*
+* **Thursday:** Montreal Corridor *(East via Hwy 417)*
+* **Friday:** Flagship Partner Facilities Dedicated Intensive""",
+        "announcement_banner": "🔔 Now scheduling Fall/Winter Regional Corridor dates across Eastern Ontario.",
+    }
+    try:
+        res = supabase.table("site_content").select("content_key, content_value").execute()
+        if res.data:
+            for item in res.data:
+                default_content[item["content_key"]] = item["content_value"]
+    except Exception:
+        pass
+    return default_content
+
+
+def update_site_content(content_dict):
+    """Upserts key-value pairs into site_content table."""
+    try:
+        for k, v in content_dict.items():
+            supabase.table("site_content").upsert({"content_key": k, "content_value": v}).execute()
+        return True, "Landing page content and pricing updated successfully!"
+    except Exception as e:
+        return False, f"CMS Update Error: {e}"
+
+
+# ----------------------------------------------------
+# 4. Business Logic Helpers
 # ----------------------------------------------------
 def calculate_session_fee(
     duration_minutes: int,
@@ -211,7 +259,7 @@ def get_data_maps():
 
 
 # ----------------------------------------------------
-# 4. PDF Generator Classes
+# 5. PDF Generator Classes
 # ----------------------------------------------------
 class PDFInvoice(FPDF):
 
@@ -420,9 +468,10 @@ def create_vet_report_pdf(horse_obj, vet_name, clinical_logs):
 
 
 # ----------------------------------------------------
-# 5. Session State & Public Marketing Landing
+# 6. Global Auth State & Public Marketing Landing
 # ----------------------------------------------------
 barns, horses, barn_map = get_data_maps()
+site_content = get_site_content()
 
 if "auth_user" not in st.session_state:
     st.session_state["auth_user"] = None
@@ -432,17 +481,20 @@ if "auth_name" not in st.session_state:
     st.session_state["auth_name"] = ""
 
 # ====================================================
-# MARKETING LANDING PAGE & UNIVERSAL LOGIN GATE
+# MARKETING SHOWCASE LANDING PAGE & UNIVERSAL LOGIN
 # ====================================================
 if st.session_state["auth_user"] is None:
-    st.markdown("""
+    if site_content.get("announcement_banner"):
+        st.info(site_content["announcement_banner"])
+
+    st.markdown(f"""
     <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 36px 24px; border-radius: 16px; color: white; text-align: center; margin-bottom: 24px;">
-        <h1 style="font-size: 2.8rem; margin: 0; color: #f8fafc; letter-spacing: -0.5px;">🐎 EQUUS PERFORMANCE THERAPEUTICS</h1>
-        <p style="font-size: 1.25rem; color: #94a3b8; margin: 8px 0 16px 0; font-weight: 300;">Advanced Cellular Bio-Stimulation & Clinical Airway Halotherapy</p>
+        <h1 style="font-size: 2.8rem; margin: 0; color: #f8fafc; letter-spacing: -0.5px;">{site_content.get('hero_title', '🐎 EQUUS PERFORMANCE THERAPEUTICS')}</h1>
+        <p style="font-size: 1.25rem; color: #94a3b8; margin: 8px 0 16px 0; font-weight: 300;">{site_content.get('hero_subtitle', 'Advanced Cellular Bio-Stimulation & Clinical Airway Halotherapy')}</p>
         <div style="display: flex; justify-content: center; gap: 12px; flex-wrap: wrap;">
-            <span style="background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 20px; font-size: 0.9rem;">📍 Russell & Ottawa Valley</span>
-            <span style="background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 20px; font-size: 0.9rem;">⚡ High-Energy Cell Treatment (HECT)</span>
-            <span style="background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 20px; font-size: 0.9rem;">💨 Micro-Particle Halotherapy</span>
+            <span style="background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 20px; font-size: 0.9rem;">{site_content.get('hero_badge_1', '📍 Russell & Ottawa Valley')}</span>
+            <span style="background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 20px; font-size: 0.9rem;">{site_content.get('hero_badge_2', '⚡ High-Energy Cell Treatment (HECT)')}</span>
+            <span style="background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 20px; font-size: 0.9rem;">{site_content.get('hero_badge_3', '💨 Micro-Particle Halotherapy')}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -450,55 +502,52 @@ if st.session_state["auth_user"] is None:
     landing_col_left, landing_col_right = st.columns([3, 2])
 
     with landing_col_left:
-        st.markdown("### 🌟 Specialized Equine Therapy Modalities")
-        
+        st.markdown("### 🌟 Clinical Services & Therapy Rates")
+
         m_col1, m_col2 = st.columns(2)
         with m_col1:
-            st.markdown("""
+            st.markdown(f"""
             <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; height: 100%;">
-                <h4 style="margin-top: 0; color: #0284c7;">⚡ Equitron-Pro (HECT)</h4>
-                <p style="font-size: 0.9rem; color: #475569; line-height: 1.5;">
-                    High-Energy Cell Treatment pulses bio-electromagnetic energy deep into cellular tissue, restoring cellular resting potential up to 20 cm deep without medication or sedation.
+                <h4 style="margin-top: 0; color: #0284c7;">{site_content.get('hect_title')}</h4>
+                <p style="font-size: 0.95rem; font-weight: bold; color: #0f172a; margin-bottom: 6px;">💵 Rate: {site_content.get('hect_price')}</p>
+                <p style="font-size: 0.88rem; color: #475569; line-height: 1.5;">
+                    {site_content.get('hect_desc')}
                 </p>
-                <ul style="font-size: 0.85rem; color: #334155; padding-left: 18px;">
-                    <li>Relieves lumbar, SI & top-line tension</li>
-                    <li>Accelerates tendon & suspensory repair</li>
-                    <li>Sore-free, non-invasive biofeedback scan</li>
+                <ul style="font-size: 0.82rem; color: #334155; padding-left: 18px;">
+                    <li>{site_content.get('hect_bullet_1')}</li>
+                    <li>{site_content.get('hect_bullet_2')}</li>
+                    <li>{site_content.get('hect_bullet_3')}</li>
                 </ul>
             </div>
             """, unsafe_allow_html=True)
 
         with m_col2:
-            st.markdown("""
+            st.markdown(f"""
             <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; height: 100%;">
-                <h4 style="margin-top: 0; color: #0d9488;">💨 HaloEQ2 (Halotherapy)</h4>
-                <p style="font-size: 0.9rem; color: #475569; line-height: 1.5;">
-                    Medical-grade dry aerosol salt halotherapy clears the deepest pulmonary bronchioles, flushing mucus, environmental allergens, and arena dust.
+                <h4 style="margin-top: 0; color: #0d9488;">{site_content.get('halo_title')}</h4>
+                <p style="font-size: 0.95rem; font-weight: bold; color: #0f172a; margin-bottom: 6px;">💵 Rate: {site_content.get('halo_price')}</p>
+                <p style="font-size: 0.88rem; color: #475569; line-height: 1.5;">
+                    {site_content.get('halo_desc')}
                 </p>
-                <ul style="font-size: 0.85rem; color: #334155; padding-left: 18px;">
-                    <li>Anti-bacterial & anti-inflammatory airway flush</li>
-                    <li>Enhances oxygenation & stamina in competition</li>
-                    <li>Rapid post-trailering respiratory recovery</li>
+                <ul style="font-size: 0.82rem; color: #334155; padding-left: 18px;">
+                    <li>{site_content.get('halo_bullet_1')}</li>
+                    <li>{site_content.get('halo_bullet_2')}</li>
+                    <li>{site_content.get('halo_bullet_3')}</li>
                 </ul>
             </div>
             """, unsafe_allow_html=True)
 
-        st.markdown("<div style='margin-top: 20px;'></div>", unsafe_allow_html=True)
-        st.markdown("### 🗺️ Designated Regional Corridor Routes")
-        st.markdown("""
-        * **Monday:** Ottawa Metro & Russell Home Corridor
-        * **Tuesday:** Kingston Corridor *(South via Hwy 416/401)*
-        * **Wednesday:** Pembroke & Upper Ottawa Valley *(North via Hwy 17)*
-        * **Thursday:** Montreal Corridor *(East via Hwy 417)*
-        * **Friday:** Flagship Partner Facilities Dedicated Intensive
-        """)
+        st.markdown("<div style='margin-top: 18px;'></div>", unsafe_allow_html=True)
+        st.markdown("### 🗺️ Designated Corridor Travel Schedule")
+        st.markdown(site_content.get("corridor_routes", ""))
 
     with landing_col_right:
-        st.markdown("### 🔐 Member & Specialist Portal")
+        st.markdown("### 🔐 Member & Specialist Access")
         portal_tabs = st.tabs(["Universal Sign-In", "New Client Registration"])
 
+        # TAB 1: UNIVERSAL SIGN-IN
         with portal_tabs[0]:
-            st.caption("Sign in with your email to access your dashboard, horses, corridor schedule, or admin tools.")
+            st.caption("Sign in with your email to access your client dashboard, horses, or specialist admin suite.")
             with st.form("universal_login_form"):
                 u_email = st.text_input("Email Address", placeholder="name@domain.ca")
                 u_pwd = st.text_input("Password", type="password", placeholder="••••••••")
@@ -531,6 +580,7 @@ if st.session_state["auth_user"] is None:
                         else:
                             st.warning("Please enter your email and new password.")
 
+        # TAB 2: NEW CLIENT REGISTRATION + WAIVER
         with portal_tabs[1]:
             st.caption("Register your horse and execute your intake liability waiver.")
             with st.form("landing_signup_form"):
@@ -586,7 +636,7 @@ if st.session_state["auth_user"] is None:
 
 
 # ----------------------------------------------------
-# 6. AUTHENTICATED SESSIONS (Client vs Paige Specialist)
+# 7. AUTHENTICATED SESSIONS (Client vs Paige Specialist)
 # ----------------------------------------------------
 st.sidebar.title("🐎 EquusOS")
 st.sidebar.markdown(f"**Logged in:** `{st.session_state['auth_name']}` ({st.session_state['auth_role']})")
@@ -767,6 +817,7 @@ CATEGORY_WORKFLOWS = {
         "Client Re-booking & Reminders",
     ],
     "👥 User & Client Management": [
+        "Landing Page & Pricing CMS",
         "User Database & Credentials",
         "Manage Clients & Appointments",
         "Public Intake & Barn QR Code",
@@ -788,9 +839,88 @@ selected_category = st.sidebar.selectbox("📂 Workspace Section", list(CATEGORY
 page = st.sidebar.radio("📌 Select Module", CATEGORY_WORKFLOWS[selected_category])
 
 # ----------------------------------------------------
+# PAGE: LANDING PAGE & PRICING CONTENT CMS
+# ----------------------------------------------------
+if page == "Landing Page & Pricing CMS":
+    st.title("🌐 Landing Page Content & Pricing Editor")
+    st.markdown("Edit headlines, therapy session pricing, service descriptions, promotional banners, and corridor routes live on your landing page.")
+
+    with st.form("cms_editor_form"):
+        st.subheader("1. Announcement Banner & Main Headlines")
+        c_banner = st.text_input("Top Announcement Banner (Leave blank to hide)", value=site_content.get("announcement_banner", ""))
+        col_h1, col_h2 = st.columns(2)
+        with col_h1:
+            c_hero_t = st.text_input("Hero Main Title", value=site_content.get("hero_title", ""))
+            c_badge1 = st.text_input("Badge 1", value=site_content.get("hero_badge_1", ""))
+            c_badge2 = st.text_input("Badge 2", value=site_content.get("hero_badge_2", ""))
+        with col_h2:
+            c_hero_sub = st.text_input("Hero Subtitle", value=site_content.get("hero_subtitle", ""))
+            c_badge3 = st.text_input("Badge 3", value=site_content.get("hero_badge_3", ""))
+
+        st.divider()
+
+        st.subheader("2. Equitron-Pro (HECT) Content & Pricing")
+        col_ec1, col_ec2 = st.columns(2)
+        with col_ec1:
+            c_hect_t = st.text_input("Equitron Title", value=site_content.get("hect_title", ""))
+            c_hect_p = st.text_input("Equitron Price Headline", value=site_content.get("hect_price", ""))
+            c_hect_d = st.text_area("Equitron Overview Description", value=site_content.get("hect_desc", ""), height=100)
+        with col_ec2:
+            c_hect_b1 = st.text_input("Equitron Bullet 1", value=site_content.get("hect_bullet_1", ""))
+            c_hect_b2 = st.text_input("Equitron Bullet 2", value=site_content.get("hect_bullet_2", ""))
+            c_hect_b3 = st.text_input("Equitron Bullet 3", value=site_content.get("hect_bullet_3", ""))
+
+        st.divider()
+
+        st.subheader("3. HaloEQ2 (Halotherapy) Content & Pricing")
+        col_hc1, col_hc2 = st.columns(2)
+        with col_hc1:
+            c_halo_t = st.text_input("HaloEQ2 Title", value=site_content.get("halo_title", ""))
+            c_halo_p = st.text_input("HaloEQ2 Price Headline", value=site_content.get("halo_price", ""))
+            c_halo_d = st.text_area("HaloEQ2 Overview Description", value=site_content.get("halo_desc", ""), height=100)
+        with col_hc2:
+            c_halo_b1 = st.text_input("HaloEQ2 Bullet 1", value=site_content.get("halo_bullet_1", ""))
+            c_halo_b2 = st.text_input("HaloEQ2 Bullet 2", value=site_content.get("halo_bullet_2", ""))
+            c_halo_b3 = st.text_input("HaloEQ2 Bullet 3", value=site_content.get("halo_bullet_3", ""))
+
+        st.divider()
+
+        st.subheader("4. Corridor Routes & Travel Days")
+        c_corridors = st.text_area("Regional Corridor Schedule (Markdown Bullet Points)", value=site_content.get("corridor_routes", ""), height=130)
+
+        if st.form_submit_button("💾 Save & Publish Changes Live to Landing Page", use_container_width=True):
+            updated_payload = {
+                "announcement_banner": c_banner,
+                "hero_title": c_hero_t,
+                "hero_subtitle": c_hero_sub,
+                "hero_badge_1": c_badge1,
+                "hero_badge_2": c_badge2,
+                "hero_badge_3": c_badge3,
+                "hect_title": c_hect_t,
+                "hect_price": c_hect_p,
+                "hect_desc": c_hect_d,
+                "hect_bullet_1": c_hect_b1,
+                "hect_bullet_2": c_hect_b2,
+                "hect_bullet_3": c_hect_b3,
+                "halo_title": c_halo_t,
+                "halo_price": c_halo_p,
+                "halo_desc": c_halo_d,
+                "halo_bullet_1": c_halo_b1,
+                "halo_bullet_2": c_halo_b2,
+                "halo_bullet_3": c_halo_b3,
+                "corridor_routes": c_corridors,
+            }
+            ok, msg = update_site_content(updated_payload)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+# ----------------------------------------------------
 # PAGE: USER DATABASE & CREDENTIAL MANAGEMENT
 # ----------------------------------------------------
-if page == "User Database & Credentials":
+elif page == "User Database & Credentials":
     st.title("👥 User Database & Access Management")
     st.markdown("View all registered user accounts, reset passwords, change user roles, and provision admin or clinician credentials.")
 
@@ -1679,7 +1809,7 @@ elif page == "Client Re-booking & Reminders":
 
         with col_r1:
             st.subheader("Reminder Message Builder")
-            horse_pick = {f"{h['name']} (Owner: {h['owner_name']} | {h['barn_details']['name']})": h for h in horses}
+            horse_pick = {f"{h['name']} ({h['owner_name']}) | {h['barn_details']['name']}": h for h in horses}
             chosen_h_label = st.selectbox("Select Horse / Owner", list(horse_pick.keys()))
             h_rem = horse_pick[chosen_h_label]
 
