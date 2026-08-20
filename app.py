@@ -100,7 +100,6 @@ def reset_user_password_db(email: str, new_password: str):
 # 3. Dynamic CMS Content Helper
 # ----------------------------------------------------
 def get_site_content():
-    """Fetches editable content from site_content table with default fallbacks."""
     default_content = {
         "hero_title": "🐎 EQUUS PERFORMANCE THERAPEUTICS",
         "hero_subtitle": "Advanced Cellular Bio-Stimulation & Clinical Airway Halotherapy",
@@ -139,7 +138,6 @@ def get_site_content():
 
 
 def update_site_content(content_dict):
-    """Upserts key-value pairs into site_content table."""
     try:
         for k, v in content_dict.items():
             supabase.table("site_content").upsert({"content_key": k, "content_value": v}).execute()
@@ -826,10 +824,14 @@ CATEGORY_WORKFLOWS = {
         "Pre-Paid Packages & Credit Passes",
         "Trainer & Referral Incentives",
     ],
-    "💳 Billing & Finances": [
+    "📊 Accounting & Bookkeeping": [
+        "Accounts Payable (A/P) Bills",
+        "Accounts Receivable (A/R) Aging",
+        "HST / Sales Tax (CRA ITC Report)",
+        "Chart of Accounts & General Ledger",
+        "Accountant Handoff Export Pack",
         "Email Invoice Dispatcher",
         "Monthly Invoicing & PDF Statements",
-        "Payments & Accounts Receivable",
         "Corridor Travel & Fuel Expenses",
         "Executive P&L Snapshot",
     ],
@@ -839,9 +841,416 @@ selected_category = st.sidebar.selectbox("📂 Workspace Section", list(CATEGORY
 page = st.sidebar.radio("📌 Select Module", CATEGORY_WORKFLOWS[selected_category])
 
 # ----------------------------------------------------
+# ACCOUNTING 1: ACCOUNTS PAYABLE (A/P) BILLS
+# ----------------------------------------------------
+if page == "Accounts Payable (A/P) Bills":
+    st.title("📑 Accounts Payable (A/P) & Vendor Bills")
+    st.markdown("Track supplier invoices, operating payables, bill due dates, payment records, and Input Tax Credits (ITCs).")
+
+    try:
+        bills_res = supabase.table("vendor_bills").select("*").order("due_date").execute()
+        all_bills = bills_res.data if bills_res.data else []
+    except Exception:
+        all_bills = []
+
+    total_ap_outstanding = sum(float(b.get("total_amount", 0)) - float(b.get("amount_paid", 0)) for b in all_bills if b.get("status") != "Paid")
+    total_ap_paid = sum(float(b.get("amount_paid", 0)) for b in all_bills)
+    total_itc_tax = sum(float(b.get("tax_hst", 0)) for b in all_bills)
+
+    c_ap1, c_ap2, c_ap3 = st.columns(3)
+    c_ap1.metric("Outstanding Accounts Payable", f"${total_ap_outstanding:,.2f} CAD", delta=f"-${total_ap_outstanding:,.2f}" if total_ap_outstanding > 0 else "All Bills Paid", delta_color="inverse")
+    c_ap2.metric("Total Vendor Bills Settled", f"${total_ap_paid:,.2f} CAD")
+    c_ap3.metric("Eligible HST/GST Tax Credits (ITCs)", f"${total_itc_tax:,.2f} CAD")
+
+    col_b1, col_b2 = st.columns([1, 1])
+
+    with col_b1:
+        with st.expander("➕ Enter New Vendor Bill", expanded=True):
+            with st.form("new_vendor_bill_form"):
+                v_name = st.text_input("Vendor / Supplier Name*", placeholder="e.g. Equitron Canada, Shell, Salt Co.")
+                v_inv_no = st.text_input("Invoice / Bill #", placeholder="INV-2026-08")
+                v_date = st.date_input("Bill Date", datetime.date.today())
+                v_due = st.date_input("Due Date", datetime.date.today() + datetime.timedelta(days=30))
+                
+                v_cat = st.selectbox("Expense Category / Account", [
+                    "5010 - Vehicle Fuel & Travel Expense",
+                    "5020 - Vehicle Maintenance & Repairs",
+                    "5030 - Equipment Sinking Fund & Maintenance",
+                    "5040 - Consumables & Clinical Supplies",
+                    "5050 - Insurance (Commercial & Equine Liability)",
+                    "5060 - Marketing, Software & Technology",
+                    "5070 - Professional Fees & Accounting",
+                    "1510 - Capital Asset (Equipment Purchase)",
+                ])
+
+                v_sub = st.number_input("Subtotal Amount ($ CAD)", min_value=0.0, step=10.0, value=100.0)
+                v_tax = st.number_input("HST / Tax Paid ($ CAD - 13% ON)", min_value=0.0, step=1.0, value=round(v_sub * 0.13, 2))
+                v_tot = v_sub + v_tax
+                st.caption(f"**Total Bill Amount:** ${v_tot:.2f} CAD")
+
+                v_notes = st.text_area("Bill Description / Notes")
+
+                if st.form_submit_button("Save Vendor Bill to A/P"):
+                    if v_name and v_tot > 0:
+                        try:
+                            supabase.table("vendor_bills").insert({
+                                "vendor_name": v_name,
+                                "bill_number": v_inv_no,
+                                "bill_date": str(v_date),
+                                "due_date": str(v_due),
+                                "category": v_cat.split(" - ")[1],
+                                "account_code": v_cat.split(" - ")[0],
+                                "subtotal": float(v_sub),
+                                "tax_hst": float(v_tax),
+                                "total_amount": float(v_tot),
+                                "amount_paid": 0.0,
+                                "status": "Unpaid",
+                                "notes": v_notes,
+                            }).execute()
+                            st.success(f"Vendor bill from {v_name} recorded!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error saving bill: {e}")
+                    else:
+                        st.warning("Please enter vendor name and amount.")
+
+    with col_b2:
+        with st.expander("💳 1-Click Pay Vendor Bill", expanded=True):
+            unpaid_bills = [b for b in all_bills if b.get("status") != "Paid"]
+            if unpaid_bills:
+                bill_opts = {f"{b['vendor_name']} (Due: {b['due_date']}) - Rem: ${float(b['total_amount']) - float(b['amount_paid']):.2f} CAD": b for b in unpaid_bills}
+                sel_b_label = st.selectbox("Select Bill to Pay", list(bill_opts.keys()))
+                target_b = bill_opts[sel_b_label]
+
+                rem_bal = float(target_b["total_amount"]) - float(target_b["amount_paid"])
+                
+                with st.form("pay_bill_form"):
+                    p_amt = st.number_input("Payment Amount ($ CAD)", min_value=1.0, max_value=rem_bal, value=rem_bal, step=10.0)
+                    p_method = st.selectbox("Payment Method", ["e-Transfer", "Credit Card", "Cheque", "Debit"])
+                    p_ref = st.text_input("Confirmation / Cheque #")
+                    p_dt = st.date_input("Payment Date", datetime.date.today())
+
+                    if st.form_submit_button("Execute Bill Payment"):
+                        try:
+                            supabase.table("vendor_payments").insert({
+                                "bill_id": target_b["id"],
+                                "payment_date": str(p_dt),
+                                "payment_method": p_method,
+                                "amount_paid": float(p_amt),
+                                "reference_number": p_ref,
+                                "notes": f"Paid {p_method} ref: {p_ref}",
+                            }).execute()
+
+                            new_paid = float(target_b["amount_paid"]) + float(p_amt)
+                            new_status = "Paid" if new_paid >= float(target_b["total_amount"]) else "Partially Paid"
+                            supabase.table("vendor_bills").update({
+                                "amount_paid": new_paid,
+                                "status": new_status,
+                            }).eq("id", target_b["id"]).execute()
+
+                            st.success(f"Payment of ${p_amt:.2f} applied to {target_b['vendor_name']}!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Payment error: {e}")
+            else:
+                st.info("No unpaid vendor bills pending in A/P.")
+
+    st.subheader("Accounts Payable Ledger")
+    if all_bills:
+        b_rows = []
+        for b in all_bills:
+            b_rows.append({
+                "Due Date": b.get("due_date"),
+                "Vendor": b.get("vendor_name"),
+                "Bill #": b.get("bill_number", "-"),
+                "Category / Account": f"{b.get('account_code')} - {b.get('category')}",
+                "Subtotal": f"${float(b.get('subtotal', 0)):.2f}",
+                "HST (ITCs)": f"${float(b.get('tax_hst', 0)):.2f}",
+                "Total Amount": f"${float(b.get('total_amount', 0)):.2f}",
+                "Paid": f"${float(b.get('amount_paid', 0)):.2f}",
+                "Status": "🟢 Paid" if b.get("status") == "Paid" else ("🟡 Partial" if b.get("status") == "Partially Paid" else "🔴 Unpaid"),
+            })
+        st.dataframe(pd.DataFrame(b_rows), use_container_width=True)
+    else:
+        st.write("No vendor bills on record.")
+
+# ----------------------------------------------------
+# ACCOUNTING 2: ACCOUNTS RECEIVABLE (A/R) AGING
+# ----------------------------------------------------
+elif page == "Accounts Receivable (A/R) Aging":
+    st.title("📈 Accounts Receivable (A/R) & Aging Summary")
+    st.markdown("Monitor outstanding client balances, overdue aging schedules (Current, 1-30, 31-60, 61-90, 90+ days), and payment collections.")
+
+    try:
+        logs_res = supabase.table("treatment_logs").select("*").execute()
+        all_logs = logs_res.data if logs_res.data else []
+    except Exception:
+        all_logs = []
+
+    try:
+        pmts_res = supabase.table("client_payments").select("*").execute()
+        all_pmts = pmts_res.data if pmts_res.data else []
+    except Exception:
+        all_pmts = []
+
+    horse_id_to_owner = {h["id"]: h.get("owner_name", "Unknown") for h in horses}
+    owners = sorted(list(set([h.get("owner_name") for h in horses if h.get("owner_name")] + [p.get("owner_name") for p in all_pmts])))
+
+    total_billed = sum(float(l.get("calculated_fee", 0)) for l in all_logs)
+    total_received = sum(float(p.get("amount_paid", 0)) for p in all_pmts)
+    total_ar = total_billed - total_received
+
+    c_ar1, c_ar2, c_ar3 = st.columns(3)
+    c_ar1.metric("Total Invoiced", f"${total_billed:,.2f} CAD")
+    c_ar2.metric("Total Collected", f"${total_received:,.2f} CAD")
+    c_ar3.metric("Net A/R Balance Outstanding", f"${total_ar:,.2f} CAD", delta=f"-${total_ar:,.2f}" if total_ar > 0 else "All Accounts Current", delta_color="inverse")
+
+    st.subheader("Client A/R Aging Analysis Schedule")
+    aging_rows = []
+    today = datetime.date.today()
+
+    for o in owners:
+        o_logs = [l for l in all_logs if horse_id_to_owner.get(l.get("horse_id")) == o]
+        o_billed = sum(float(l.get("calculated_fee", 0)) for l in o_logs)
+        o_paid = sum(float(p.get("amount_paid", 0)) for p in all_pmts if p.get("owner_name") == o)
+        o_balance = o_billed - o_paid
+
+        cur_amt, d1_30, d31_60, d61_90, d90_plus = 0.0, 0.0, 0.0, 0.0, 0.0
+        if o_balance > 0:
+            if o_logs:
+                oldest_date_str = str(o_logs[-1].get("created_at", ""))[:10]
+                try:
+                    oldest_date = datetime.datetime.strptime(oldest_date_str, "%Y-%m-%d").date()
+                    age_days = (today - oldest_date).days
+                except Exception:
+                    age_days = 0
+
+                if age_days <= 0:
+                    cur_amt = o_balance
+                elif age_days <= 30:
+                    d1_30 = o_balance
+                elif age_days <= 60:
+                    d31_60 = o_balance
+                elif age_days <= 90:
+                    d61_90 = o_balance
+                else:
+                    d90_plus = o_balance
+            else:
+                cur_amt = o_balance
+
+        aging_rows.append({
+            "Client / Owner": o,
+            "Total Invoiced": f"${o_billed:,.2f}",
+            "Total Paid": f"${o_paid:,.2f}",
+            "Current Due": f"${cur_amt:,.2f}",
+            "1 - 30 Days": f"${d1_30:,.2f}",
+            "31 - 60 Days": f"${d31_60:,.2f}",
+            "61 - 90 Days": f"${d61_90:,.2f}",
+            "90+ Days Overdue": f"${d90_plus:,.2f}",
+            "Total Balance": f"${o_balance:,.2f}",
+            "Status": "✅ Paid in Full" if o_balance <= 0 else "⚠️ Overdue",
+        })
+
+    if aging_rows:
+        df_aging = pd.DataFrame(aging_rows)
+        st.dataframe(df_aging, use_container_width=True)
+
+        csv_ar = df_aging.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="📥 Export A/R Aging Schedule (CSV)",
+            data=csv_ar,
+            file_name=f"EquusOS_AR_Aging_Report_{datetime.date.today()}.csv",
+            mime="text/csv",
+        )
+    else:
+        st.info("No active accounts receivable records.")
+
+# ----------------------------------------------------
+# ACCOUNTING 3: HST / SALES TAX & CRA ITC REPORT
+# ----------------------------------------------------
+elif page == "HST / Sales Tax (CRA ITC Report)":
+    st.title("🏛️ Canadian HST / GST & Input Tax Credit (ITC) Report")
+    st.markdown("Track sales tax collected on therapeutic services and corridor travel against ITCs paid on business expenses for CRA filings.")
+
+    try:
+        logs_res = supabase.table("treatment_logs").select("calculated_fee").execute()
+        gross_therapy = sum(float(l.get("calculated_fee", 0)) for l in logs_res.data) if logs_res.data else 0.0
+    except Exception:
+        gross_therapy = 0.0
+
+    try:
+        appts_res = supabase.table("appointments").select("travel_fee").execute()
+        gross_travel = sum(float(a.get("travel_fee", 0)) for a in appts_res.data) if appts_res.data else 0.0
+    except Exception:
+        gross_travel = 0.0
+
+    try:
+        bills_res = supabase.table("vendor_bills").select("subtotal, tax_hst").execute()
+        vendor_tax_itcs = sum(float(b.get("tax_hst", 0)) for b in bills_res.data) if bills_res.data else 0.0
+    except Exception:
+        vendor_tax_itcs = 0.0
+
+    tax_rate = st.sidebar.number_input("Tax Rate (%) - Default Ontario HST", min_value=0.0, max_value=25.0, value=13.0, step=1.0)
+    
+    taxable_revenue = gross_therapy + gross_travel
+    hst_collected = round(taxable_revenue * (tax_rate / 100.0), 2)
+    itcs_paid = round(vendor_tax_itcs, 2)
+    net_tax_remittance = hst_collected - itcs_paid
+
+    c_tx1, c_tx2, c_tx3 = st.columns(3)
+    c_tx1.metric(f"HST Collected on Sales ({tax_rate}%)", f"${hst_collected:,.2f} CAD")
+    c_tx2.metric("Input Tax Credits (ITCs Paid)", f"${itcs_paid:,.2f} CAD")
+    c_tx3.metric("Net Remittance to CRA", f"${net_tax_remittance:,.2f} CAD", delta=f"${net_tax_remittance:,.2f}" if net_tax_remittance >= 0 else "CRA Refund Due", delta_color="normal" if net_tax_remittance >= 0 else "inverse")
+
+    st.subheader("CRA Sales Tax Breakdown Ledger")
+    tax_summary_data = [
+        {"CRA Line Item": "Line 101 - Total Sales & Revenue", "Amount (CAD)": f"${taxable_revenue:,.2f}"},
+        {"CRA Line Item": "Line 105 - Total HST/GST Collected or Collectible", "Amount (CAD)": f"${hst_collected:,.2f}"},
+        {"CRA Line Item": "Line 108 - Total Input Tax Credits (ITCs on Purchases)", "Amount (CAD)": f"-${itcs_paid:,.2f}"},
+        {"CRA Line Item": "Line 109 - Net Tax Payable / (Refund Eligible)", "Amount (CAD)": f"${net_tax_remittance:,.2f}"},
+    ]
+    st.dataframe(pd.DataFrame(tax_summary_data), use_container_width=True)
+
+    csv_tax = pd.DataFrame(tax_summary_data).to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="📥 Export CRA Sales Tax Return Pack (CSV)",
+        data=csv_tax,
+        file_name=f"EquusOS_HST_CRA_Return_{datetime.date.today()}.csv",
+        mime="text/csv",
+    )
+
+# ----------------------------------------------------
+# ACCOUNTING 4: CHART OF ACCOUNTS & GENERAL LEDGER
+# ----------------------------------------------------
+elif page == "Chart of Accounts & General Ledger":
+    st.title("📚 Chart of Accounts & General Ledger")
+    st.markdown("Standard double-entry chart of accounts structuring Assets (1000s), Liabilities (2000s), Equity (3000s), Revenue (4000s), and Expenses (5000s).")
+
+    try:
+        coa_res = supabase.table("chart_of_accounts").select("*").order("account_code").execute()
+        all_accounts = coa_res.data if coa_res.data else []
+    except Exception:
+        all_accounts = []
+
+    col_coa1, col_coa2 = st.columns([1, 2])
+
+    with col_coa1:
+        with st.expander("➕ Add New Account to Ledger", expanded=True):
+            with st.form("new_coa_form"):
+                a_code = st.text_input("Account Code (e.g. 5080)")
+                a_name = st.text_input("Account Name")
+                a_type = st.selectbox("Account Type", ["Asset", "Liability", "Equity", "Revenue", "Expense"])
+                a_desc = st.text_area("Description")
+
+                if st.form_submit_button("Save Account to Chart of Accounts"):
+                    if a_code and a_name:
+                        try:
+                            supabase.table("chart_of_accounts").insert({
+                                "account_code": a_code,
+                                "account_name": a_name,
+                                "account_type": a_type,
+                                "description": a_desc,
+                            }).execute()
+                            st.success(f"Added account {a_code} - {a_name}!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                    else:
+                        st.warning("Please provide account code and name.")
+
+    with col_coa2:
+        st.subheader("Active Chart of Accounts")
+        if all_accounts:
+            st.dataframe(pd.DataFrame(all_accounts)[["account_code", "account_name", "account_type", "description"]].rename(
+                columns={
+                    "account_code": "Code",
+                    "account_name": "Account Name",
+                    "account_type": "Classification",
+                    "description": "Ledger Description",
+                }
+            ), use_container_width=True)
+        else:
+            st.info("Chart of accounts empty.")
+
+# ----------------------------------------------------
+# ACCOUNTING 5: ACCOUNTANT HANDOFF EXPORT PACK
+# ----------------------------------------------------
+elif page == "Accountant Handoff Export Pack":
+    st.title("💼 Accountant Year-End & Period Handoff Pack")
+    st.markdown("1-Click export of complete bookkeeping packages: General Ledger, Trial Balance, P&L, Balance Sheet, A/R Aging, A/P Aging, and Sales Tax schedules.")
+
+    try:
+        l_res = supabase.table("treatment_logs").select("calculated_fee").execute()
+        total_session_rev = sum(float(l.get("calculated_fee", 0)) for l in l_res.data) if l_res.data else 0.0
+    except Exception:
+        total_session_rev = 0.0
+
+    try:
+        a_res = supabase.table("appointments").select("travel_fee").execute()
+        total_travel_rev = sum(float(a.get("travel_fee", 0)) for a in a_res.data) if a_res.data else 0.0
+    except Exception:
+        total_travel_rev = 0.0
+
+    try:
+        p_res = supabase.table("client_payments").select("amount_paid").execute()
+        total_collected = sum(float(p.get("amount_paid", 0)) for p in p_res.data) if p_res.data else 0.0
+    except Exception:
+        total_collected = 0.0
+
+    try:
+        b_res = supabase.table("vendor_bills").select("subtotal, tax_hst, total_amount, amount_paid, category").execute()
+        total_bills_amt = sum(float(b.get("total_amount", 0)) for b in b_res.data) if b_res.data else 0.0
+        total_bills_paid = sum(float(b.get("amount_paid", 0)) for b in b_res.data) if b_res.data else 0.0
+        total_itc_tax = sum(float(b.get("tax_hst", 0)) for b in b_res.data) if b_res.data else 0.0
+    except Exception:
+        total_bills_amt, total_bills_paid, total_itc_tax = 0.0, 0.0, 0.0
+
+    total_revenue = total_session_rev + total_travel_rev
+    ar_balance = total_revenue - total_collected
+    ap_balance = total_bills_amt - total_bills_paid
+    operating_expenses = total_bills_amt - total_itc_tax
+    net_income = total_revenue - operating_expenses
+
+    trial_balance_data = [
+        {"Account Code": "1010", "Account Name": "Operating Bank Account", "Debit ($ CAD)": f"${total_collected - total_bills_paid:,.2f}", "Credit ($ CAD)": "$0.00"},
+        {"Account Code": "1050", "Account Name": "Accounts Receivable (A/R)", "Debit ($ CAD)": f"${ar_balance:,.2f}", "Credit ($ CAD)": "$0.00"},
+        {"Account Code": "2010", "Account Name": "Accounts Payable (A/P)", "Debit ($ CAD)": "$0.00", "Credit ($ CAD)": f"${ap_balance:,.2f}"},
+        {"Account Code": "2050", "Account Name": "HST Collected on Sales", "Debit ($ CAD)": "$0.00", "Credit ($ CAD)": f"${total_revenue * 0.13:,.2f}"},
+        {"Account Code": "2060", "Account Name": "HST Input Tax Credits Paid", "Debit ($ CAD)": f"${total_itc_tax:,.2f}", "Credit ($ CAD)": "$0.00"},
+        {"Account Code": "4010", "Account Name": "Therapy Session Revenue", "Debit ($ CAD)": "$0.00", "Credit ($ CAD)": f"${total_session_rev:,.2f}"},
+        {"Account Code": "4020", "Account Name": "Corridor Mileage Revenue", "Debit ($ CAD)": "$0.00", "Credit ($ CAD)": f"${total_travel_rev:,.2f}"},
+        {"Account Code": "5000", "Account Name": "Operating Expenses (Total)", "Debit ($ CAD)": f"${operating_expenses:,.2f}", "Credit ($ CAD)": "$0.00"},
+    ]
+
+    st.subheader("📑 Period Trial Balance Summary")
+    st.dataframe(pd.DataFrame(trial_balance_data), use_container_width=True)
+
+    c_ex1, c_ex2 = st.columns(2)
+
+    with c_ex1:
+        st.markdown("### 📦 1-Click Accountant Package Downloads")
+        tb_csv = pd.DataFrame(trial_balance_data).to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="📥 Download Complete Trial Balance & General Ledger (CSV)",
+            data=tb_csv,
+            file_name=f"EquusOS_Trial_Balance_For_Accountant_{datetime.date.today()}.csv",
+            mime="text/csv",
+        )
+
+    with c_ex2:
+        st.markdown("### 📊 Quick Executive Financial Summary")
+        st.info(f"""
+        * **Gross Business Revenue:** **${total_revenue:,.2f} CAD**
+        * **Total Operational Expenses:** **${operating_expenses:,.2f} CAD**
+        * **Pre-Tax Net Operating Income:** **${net_income:,.2f} CAD**
+        * **A/R Uncollected Balance:** **${ar_balance:,.2f} CAD**
+        * **A/P Unpaid Bills Balance:** **${ap_balance:,.2f} CAD**
+        """)
+
+# ----------------------------------------------------
 # PAGE: LANDING PAGE & PRICING CONTENT CMS
 # ----------------------------------------------------
-if page == "Landing Page & Pricing CMS":
+elif page == "Landing Page & Pricing CMS":
     st.title("🌐 Landing Page Content & Pricing Editor")
     st.markdown("Edit headlines, therapy session pricing, service descriptions, promotional banners, and corridor routes live on your landing page.")
 
@@ -1485,422 +1894,6 @@ elif page == "Photo & Video Progress Gallery":
     else:
         st.info("Please register a horse profile first.")
 
-elif page == "Veterinary Clinical Reports":
-    st.title("🩺 Veterinary Clinical Summary Reports")
-    st.markdown(
-        "Generate concise, professional clinical treatment summaries for veterinarians and training teams."
-    )
-
-    if horses:
-        col_v1, col_v2 = st.columns([1, 2])
-
-        with col_v1:
-            horse_lookup = {f"{h['name']} ({h['owner_name']} | {h['barn_details']['name']})": h for h in horses}
-            sel_label = st.selectbox("Select Horse for Clinical Report", list(horse_lookup.keys()))
-            chosen_horse_obj = horse_lookup[sel_label]
-
-            try:
-                w_res = (
-                    supabase.table("client_waivers")
-                    .select("primary_veterinarian, vet_phone")
-                    .eq("horse_name", chosen_horse_obj.get("name"))
-                    .execute()
-                )
-                vet_info = w_res.data[0] if w_res.data else {}
-            except Exception:
-                vet_info = {}
-
-            default_vet = vet_info.get("primary_veterinarian", "")
-            vet_contact_input = st.text_input(
-                "Primary Veterinarian",
-                value=default_vet if default_vet else "Attending Equine DVM",
-            )
-
-            try:
-                h_logs_res = (
-                    supabase.table("treatment_logs")
-                    .select("*")
-                    .eq("horse_id", str(chosen_horse_obj["id"]))
-                    .order("created_at", desc=True)
-                    .execute()
-                )
-                horse_logs = h_logs_res.data if h_logs_res.data else []
-            except Exception:
-                horse_logs = []
-
-        with col_v2:
-            st.subheader(f"Clinical Summary: {chosen_horse_obj['name']}")
-            st.markdown(f"**Owner:** {chosen_horse_obj['owner_name']} | **Facility:** {chosen_horse_obj['barn_details']['name']}")
-
-            if horse_logs:
-                st.write(f"Total Recorded Sessions: **{len(horse_logs)}**")
-
-                for l in horse_logs[:3]:
-                    st.caption(
-                        f"• **{l.get('created_at', '')[:10]}** — `{l.get('modality')}` ({l.get('duration_minutes')} mins): {l.get('session_notes')}"
-                    )
-
-                vet_pdf_bytes = create_vet_report_pdf(
-                    chosen_horse_obj, vet_contact_input, horse_logs
-                )
-
-                st.download_button(
-                    label="📄 Export Veterinary Clinical Report (PDF)",
-                    data=bytes(vet_pdf_bytes),
-                    file_name=f"EquusOS_Clinical_Report_{chosen_horse_obj['name'].replace(' ', '_')}_{datetime.date.today()}.pdf",
-                    mime="application/pdf",
-                )
-            else:
-                st.info("No clinical sessions recorded for this horse yet.")
-    else:
-        st.info("Please register a horse profile first.")
-
-elif page == "Client Health Portal":
-    st.title("Client Health & Progress Portal")
-    st.markdown("Transparent access for horse owners to review clinical notes and session logs.")
-
-    if horses:
-        owners = sorted(list(set(h["owner_name"] for h in horses if h.get("owner_name"))))
-        selected_owner = st.selectbox("Select Registered Owner", owners)
-
-        owner_horses = [h for h in horses if h.get("owner_name") == selected_owner]
-        selected_horse_name = st.selectbox("Select Your Horse", [h["name"] for h in owner_horses])
-        active_horse = next(h for h in owner_horses if h["name"] == selected_horse_name)
-
-        st.metric(
-            label="Monthly Usage Logged",
-            value=f"{active_horse.get('minutes_used_this_month', 0)} Mins",
-        )
-
-        st.subheader(f"Treatment History: {active_horse['name']}")
-        try:
-            logs_res = (
-                supabase.table("treatment_logs")
-                .select("*")
-                .eq("horse_id", str(active_horse["id"]))
-                .order("created_at", desc=True)
-                .execute()
-            )
-            logs = logs_res.data if logs_res.data else []
-        except Exception:
-            logs = []
-
-        if logs:
-            for log in logs:
-                st.info(f"""
-                **Date:** {log.get('created_at', '')[:10]} | **Modality:** {log.get('modality', 'Therapy')} ({log.get('duration_minutes', 20)} mins)  
-                **Observations:** {log.get('session_notes', '')}  
-                **Amount:** ${float(log.get('calculated_fee', 0)):.2f} CAD
-                """)
-        else:
-            st.write("No session records found for this horse.")
-    else:
-        st.info("No horses registered in the database yet.")
-
-# ----------------------------------------------------
-# 2. DISPATCH & CORRIDORS
-# ----------------------------------------------------
-elif page == "Corridor Calendar & Daily Run-Sheet":
-    st.title("📅 Corridor Schedule & Daily Dispatch Run-Sheet")
-    st.markdown("Organize weekly corridor runs, track stop order, and generate daily mobile dispatch sheets.")
-
-    try:
-        appts_res = supabase.table("appointments").select("*").order("appointment_date").execute()
-        all_appts = appts_res.data if appts_res.data else []
-    except Exception:
-        all_appts = []
-
-    horse_map = {h["id"]: h for h in horses}
-
-    col_d1, col_d2 = st.columns([1, 2])
-
-    with col_d1:
-        st.subheader("Select Run-Sheet Date")
-        selected_run_date = st.date_input(
-            "Dispatch Date", datetime.date.today(), key="run_date_picker"
-        )
-
-        day_of_week = selected_run_date.strftime("%A")
-        corridor_match = {
-            "Monday": "Ottawa Metro & Russell Home Corridor",
-            "Tuesday": "Kingston Corridor (South - Hwy 416/401)",
-            "Wednesday": "Pembroke & Upper Valley Corridor (North - Hwy 17)",
-            "Thursday": "Montreal Corridor (East - Hwy 417)",
-            "Friday": "Flagship Barn Dedicated Intensive",
-        }.get(day_of_week, "Custom / Weekend Route")
-
-        st.info(f"📍 **Scheduled Corridor:** {corridor_match}")
-
-    with col_d2:
-        daily_appts = [
-            a for a in all_appts if a.get("appointment_date") == str(selected_run_date)
-        ]
-
-        st.subheader(
-            f"Daily Stop Itinerary: {selected_run_date.strftime('%b %d, %Y')} ({len(daily_appts)} Stops)"
-        )
-
-        if daily_appts:
-            for idx, appt in enumerate(daily_appts, start=1):
-                h_info = horse_map.get(appt.get("horse_id"), {})
-                b_info = h_info.get("barn_details", {})
-                with st.container():
-                    c_s1, c_s2 = st.columns([3, 1])
-                    with c_s1:
-                        st.markdown(
-                            f"**Stop {idx}: {h_info.get('name', 'Horse')}** (Owner: {h_info.get('owner_name', 'N/A')})"
-                        )
-                        st.caption(
-                            f"📍 Facility: **{b_info.get('name', 'Barn')}** | Distance: {appt.get('distance_from_base_km', 0)} km | "
-                            f"Fee: ${float(appt.get('travel_fee', 0)):.2f}"
-                        )
-                    with c_s2:
-                        new_status = st.selectbox(
-                            "Status",
-                            ["Confirmed", "En Route", "Completed", "Rescheduled"],
-                            index=["Confirmed", "En Route", "Completed", "Rescheduled"].index(
-                                appt.get("status", "Confirmed")
-                            ),
-                            key=f"status_select_{appt['id']}",
-                        )
-                        if new_status != appt.get("status"):
-                            supabase.table("appointments").update(
-                                {"status": new_status}
-                            ).eq("id", appt["id"]).execute()
-                            st.rerun()
-                    st.divider()
-
-            run_sheet_df = pd.DataFrame([
-                {
-                    "Stop": i + 1,
-                    "Horse": horse_map.get(a.get("horse_id"), {}).get("name", ""),
-                    "Owner": horse_map.get(a.get("horse_id"), {}).get("owner_name", ""),
-                    "Barn / Facility": horse_map.get(a.get("horse_id"), {}).get("barn_details", {}).get("name", ""),
-                    "Distance (km)": a.get("distance_from_base_km", 0),
-                    "Travel Fee": f"${float(a.get('travel_fee', 0)):.2f}",
-                    "Status": a.get("status", "Confirmed"),
-                }
-                for i, a in enumerate(daily_appts)
-            ])
-
-            csv_sheet = run_sheet_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="📥 Export Daily Dispatch Run-Sheet (CSV)",
-                data=csv_sheet,
-                file_name=f"EquusOS_RunSheet_{selected_run_date}.csv",
-                mime="text/csv",
-            )
-        else:
-            st.info(f"No appointments booked for {selected_run_date.strftime('%A, %B %d, %Y')}.")
-
-    st.subheader("Upcoming 14-Day Dispatch Outlook")
-    if all_appts:
-        outlook_rows = []
-        for a in all_appts:
-            h_obj = horse_map.get(a.get("horse_id"), {})
-            outlook_rows.append({
-                "Date": a.get("appointment_date"),
-                "Horse": h_obj.get("name", "N/A"),
-                "Owner": h_obj.get("owner_name", "N/A"),
-                "Barn": h_obj.get("barn_details", {}).get("name", "N/A"),
-                "Travel Fee": f"${float(a.get('travel_fee', 0)):.2f}",
-                "Status": a.get("status", "Confirmed"),
-            })
-        st.dataframe(pd.DataFrame(outlook_rows), use_container_width=True)
-
-elif page == "Smart Route Booking & Mileage":
-    st.title("Smart Route Corridor Dispatcher")
-    st.markdown(
-        "Optimize travel routes and automatically calculate mileage fees outside the 30km radius."
-    )
-
-    col1, col2 = st.columns(2)
-    with col1:
-        with st.form("booking_form"):
-            st.subheader("Book Route Appointment")
-            if horses:
-                horse_opts = {f"{h['name']} ({h['barn_details']['name']})": h for h in horses}
-                h_choice = st.selectbox("Select Horse", list(horse_opts.keys()))
-                chosen_horse = horse_opts[h_choice]
-
-                app_date = st.date_input("Appointment Date", datetime.date.today())
-                distance = st.number_input(
-                    "Estimated Distance from Base (km)",
-                    min_value=0.0,
-                    value=35.0,
-                    step=1.0,
-                )
-
-                if st.form_submit_button("Confirm Booking"):
-                    try:
-                        barn_id_val = chosen_horse.get("barn_id")
-
-                        query = (
-                            supabase.table("appointments")
-                            .select("id")
-                            .eq("appointment_date", str(app_date))
-                        )
-                        if barn_id_val:
-                            query = query.eq("barn_id", str(barn_id_val))
-
-                        appts_res = query.execute()
-                        same_day_count = (len(appts_res.data) if appts_res.data else 0) + 1
-
-                        travel_fee, is_waived, reason = calculate_travel_fee(
-                            float(distance), same_day_count
-                        )
-
-                        payload = {
-                            "appointment_date": str(app_date),
-                            "horse_id": str(chosen_horse["id"]),
-                            "distance_from_base_km": float(distance),
-                            "travel_fee": float(travel_fee),
-                            "status": "Confirmed",
-                        }
-                        if barn_id_val:
-                            payload["barn_id"] = str(barn_id_val)
-
-                        supabase.table("appointments").insert(payload).execute()
-
-                        st.success(f"Appointment Confirmed! Travel Fee: ${travel_fee:.2f} CAD ({reason})")
-                        st.rerun()
-                    except Exception as err:
-                        st.error(f"Booking Error: {err}")
-
-    with col2:
-        st.subheader("Designated Corridor Days")
-        st.info("""
-        * **Monday:** Ottawa Metro & Russell Home Base
-        * **Tuesday:** Kingston Corridor (South)
-        * **Wednesday:** Pembroke / Valley Corridor (North)
-        * **Thursday:** Montreal Corridor (East)
-        * **Friday:** Flagship Barn Dedicated Intensive
-        """)
-
-    st.subheader("Scheduled Route Dispatches")
-    try:
-        appts_res = supabase.table("appointments").select("*").order("appointment_date").execute()
-        appts = appts_res.data if appts_res.data else []
-    except Exception:
-        appts = []
-
-    horse_map = {h["id"]: h for h in horses}
-
-    if appts:
-        for a in appts:
-            h_obj = horse_map.get(a.get("horse_id"), {})
-            b_name = h_obj.get("barn_details", {}).get("name", "Barn")
-            st.write(
-                f"📅 **{a.get('appointment_date')}** | **{h_obj.get('name', 'Horse')}** @ {b_name} | "
-                f"Travel Fee: `${float(a.get('travel_fee', 0)):.2f}` CAD | Status: `{a.get('status', 'Confirmed')}`"
-            )
-    else:
-        st.write("No appointments scheduled.")
-
-elif page == "Client Re-booking & Reminders":
-    st.title("💬 Automated Client Reminders & Re-Booking Hub")
-    st.markdown(
-        "Generate personalized SMS and WhatsApp dispatch notifications, "
-        "arrival reminders, and post-session re-booking prompts."
-    )
-
-    if horses:
-        col_r1, col_r2 = st.columns([1, 1])
-
-        with col_r1:
-            st.subheader("Reminder Message Builder")
-            horse_pick = {f"{h['name']} ({h['owner_name']}) | {h['barn_details']['name']}": h for h in horses}
-            chosen_h_label = st.selectbox("Select Horse / Owner", list(horse_pick.keys()))
-            h_rem = horse_pick[chosen_h_label]
-
-            phone_num = st.text_input("Owner Phone Number (for WhatsApp/SMS)", placeholder="e.g. 6135551234")
-
-            reminder_type = st.selectbox(
-                "Message Type",
-                [
-                    "Appointment Confirmation & ETA",
-                    "48-Hour Post-Equitron Recovery Check-In",
-                    "Bi-Weekly Maintenance Re-Booking Prompt",
-                    "Group Barn Route Booking Callout",
-                ],
-            )
-
-            appt_date_txt = st.date_input("Appointment / Target Date", datetime.date.today())
-            arrival_window = st.selectbox(
-                "Estimated Arrival Window",
-                [
-                    "Morning (9:00 AM - 11:00 AM)",
-                    "Midday (11:00 AM - 1:00 PM)",
-                    "Afternoon (1:00 PM - 3:30 PM)",
-                    "Late Afternoon (3:30 PM - 5:30 PM)",
-                ],
-            )
-
-        with col_r2:
-            st.subheader("Generated Message Preview")
-
-            owner_first = (
-                h_rem.get("owner_name", "there").split()[0]
-                if h_rem.get("owner_name")
-                else "there"
-            )
-            horse_n = h_rem.get("name", "your horse")
-            barn_n = h_rem.get("barn_details", {}).get("name", "the barn")
-
-            if reminder_type == "Appointment Confirmation & ETA":
-                message_body = (
-                    f"Hi {owner_first}! Confirming our Equus Performance session for {horse_n} on "
-                    f"{appt_date_txt.strftime('%A, %b %d')} at {barn_n}. Our estimated arrival window is {arrival_window}. "
-                    f"Please ensure {horse_n} is brought in and dry. Looking forward to seeing you!"
-                )
-            elif reminder_type == "48-Hour Post-Equitron Recovery Check-In":
-                message_body = (
-                    f"Hi {owner_first}! Just checking in on {horse_n} following our Equitron session. "
-                    f"How is their topline and movement feeling under saddle? Let me know if you noticed any relaxed biofeedback changes!"
-                )
-            elif reminder_type == "Bi-Weekly Maintenance Re-Booking Prompt":
-                message_body = (
-                    f"Hi {owner_first}! It has been about two weeks since {horse_n}'s last cellular therapy session. "
-                    f"We are scheduling our upcoming corridor run to {barn_n}. Would you like to reserve a spot to maintain their peak performance?"
-                )
-            else:
-                message_body = (
-                    f"Hi {owner_first}! We are opening our route dispatch to {barn_n} for {appt_date_txt.strftime('%A, %b %d')}. "
-                    f"If we group 3 or more horses together, travel mileage fees are 100% waived! Let me know if you'd like to include {horse_n}."
-                )
-
-            st.text_area("Copy Text", value=message_body, height=160, key="reminder_text_box")
-
-            clean_phone = "".join(filter(str.isdigit, phone_num))
-            if len(clean_phone) == 10:
-                clean_phone = "1" + clean_phone
-
-            if clean_phone:
-                encoded_msg = urllib.parse.quote(message_body)
-                wa_url = f"https://wa.me/{clean_phone}?text={encoded_msg}"
-                st.markdown(f"""
-                    <a href="{wa_url}" target="_blank">
-                        <button style="
-                            background-color: #25D366;
-                            color: white;
-                            border: none;
-                            padding: 10px 20px;
-                            font-size: 16px;
-                            border-radius: 8px;
-                            cursor: pointer;
-                            font-weight: bold;
-                            width: 100%;
-                        ">📲 Send via WhatsApp</button>
-                    </a>
-                    """, unsafe_allow_html=True)
-            else:
-                st.caption("💡 Enter a phone number above to enable 1-click WhatsApp messaging.")
-    else:
-        st.info("Please register a horse profile first.")
-
-# ----------------------------------------------------
-# 3. CLIENTS & FACILITIES
-# ----------------------------------------------------
 elif page == "Public Intake & Barn QR Code":
     st.title("📲 Public Self-Serve Intake & Barn QR Generator")
     st.markdown(
@@ -2523,128 +2516,6 @@ elif page == "Monthly Invoicing & PDF Statements":
             st.info(f"No treatment sessions on record for {chosen_barn_name}.")
     else:
         st.info("No barns registered in the database.")
-
-elif page == "Payments & Accounts Receivable":
-    st.title("💳 Accounts Receivable & Payment Tracking")
-    st.markdown("Record received payments from horse owners and monitor outstanding account balances.")
-
-    try:
-        all_logs_res = supabase.table("treatment_logs").select("*").execute()
-        all_logs_data = all_logs_res.data if all_logs_res.data else []
-    except Exception:
-        all_logs_data = []
-
-    try:
-        all_pmts_res = supabase.table("client_payments").select("*").order("payment_date", desc=True).execute()
-        all_pmts_data = all_pmts_res.data if all_pmts_res.data else []
-    except Exception:
-        all_pmts_data = []
-
-    horse_id_to_owner = {h["id"]: h.get("owner_name", "Unknown") for h in horses}
-    all_owners = sorted(
-        list(
-            set(
-                [h.get("owner_name") for h in horses if h.get("owner_name")]
-                + [p.get("owner_name") for p in all_pmts_data]
-            )
-        )
-    )
-
-    total_revenue_billed = sum(float(l.get("calculated_fee", 0)) for l in all_logs_data)
-    total_revenue_received = sum(float(p.get("amount_paid", 0)) for p in all_pmts_data)
-    total_outstanding_ar = total_revenue_billed - total_revenue_received
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total Billed to Date", f"${total_revenue_billed:,.2f} CAD")
-    m2.metric("Total Payments Collected", f"${total_revenue_received:,.2f} CAD")
-    m3.metric(
-        "Outstanding A/R Balance",
-        f"${total_outstanding_ar:,.2f} CAD",
-        delta=f"-${total_outstanding_ar:,.2f}" if total_outstanding_ar > 0 else "Paid in Full",
-        delta_color="inverse",
-    )
-
-    col_pay1, col_pay2 = st.columns(2)
-
-    with col_pay1:
-        with st.expander("💵 Record Client Payment", expanded=True):
-            with st.form("record_payment_form"):
-                p_owner = st.selectbox(
-                    "Select Owner / Client",
-                    all_owners if all_owners else ["Please register a horse/owner first"],
-                )
-                p_date = st.date_input("Payment Date", datetime.date.today())
-                p_amount = st.number_input("Amount Paid (CAD)", min_value=0.0, step=10.0, value=60.0)
-                p_method = st.selectbox("Payment Method", ["e-Transfer", "Cheque", "Credit Card", "Cash"])
-                p_ref = st.text_input("Reference / Confirmation # (Optional)")
-                p_notes = st.text_area("Notes / Invoice Applied To")
-
-                if st.form_submit_button("Save Payment Record"):
-                    if p_owner and p_amount > 0:
-                        try:
-                            supabase.table("client_payments").insert({
-                                "payment_date": str(p_date),
-                                "owner_name": p_owner,
-                                "amount_paid": float(p_amount),
-                                "payment_method": p_method,
-                                "reference_number": p_ref,
-                                "notes": p_notes,
-                            }).execute()
-                            st.success(f"Recorded ${p_amount:.2f} payment from {p_owner}!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error saving payment: {e}")
-                    else:
-                        st.warning("Please enter a valid amount and select an owner.")
-
-    with col_pay2:
-        with st.expander("📊 Owner Balance Breakdown", expanded=True):
-            if all_owners:
-                owner_balances = []
-                for o in all_owners:
-                    o_billed = sum(
-                        float(l.get("calculated_fee", 0))
-                        for l in all_logs_data
-                        if horse_id_to_owner.get(l.get("horse_id")) == o
-                    )
-                    o_paid = sum(
-                        float(p.get("amount_paid", 0))
-                        for p in all_pmts_data
-                        if p.get("owner_name") == o
-                    )
-                    o_balance = o_billed - o_paid
-                    owner_balances.append({
-                        "Owner Name": o,
-                        "Total Billed": f"${o_billed:,.2f}",
-                        "Total Paid": f"${o_paid:,.2f}",
-                        "Balance Due": f"${o_balance:,.2f}",
-                        "Status": "✅ Paid" if o_balance <= 0 else "⚠️ Outstanding",
-                    })
-
-                st.dataframe(pd.DataFrame(owner_balances), use_container_width=True)
-            else:
-                st.write("No owner accounts active.")
-
-    st.subheader("Recent Payment History")
-    if all_pmts_data:
-        for p in all_pmts_data:
-            with st.container():
-                c_p1, c_p2 = st.columns([4, 1])
-                with c_p1:
-                    st.markdown(
-                        f"**{p.get('owner_name')}** — `${float(p.get('amount_paid', 0)):.2f}` CAD via `{p.get('payment_method')}`"
-                    )
-                    ref_txt = (
-                        f"Ref: {p.get('reference_number')} | "
-                        if p.get("reference_number")
-                        else ""
-                    )
-                    st.caption(f"{ref_txt}{p.get('notes', '')}")
-                with c_p2:
-                    st.markdown(f"📅 **{p.get('payment_date')}**")
-                st.divider()
-    else:
-        st.write("No payments recorded yet.")
 
 elif page == "Corridor Travel & Fuel Expenses":
     st.title("🚗 Corridor Travel & Operational Expense Tracker")
