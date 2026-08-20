@@ -1,10 +1,11 @@
 import datetime
+import hashlib
 import io
-import urllib.parse
 import smtplib
+import urllib.parse
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
 from fpdf import FPDF
 import pandas as pd
 import streamlit as st
@@ -28,7 +29,81 @@ supabase = init_supabase()
 
 
 # ----------------------------------------------------
-# 2. Business Logic Helpers
+# 2. Secure Hashing & Auth Database Helpers
+# ----------------------------------------------------
+def hash_password(password: str) -> str:
+    """Generates a secure SHA-256 hash with a static salt for DB storage."""
+    salt = "equus_perf_2026_salt"
+    return hashlib.sha256((password + salt).encode("utf-8")).hexdigest()
+
+
+def authenticate_db_user(email: str, password: str, required_role: str = None):
+    """Checks credentials against the app_users database table."""
+    try:
+        res = (
+            supabase.table("app_users")
+            .select("*")
+            .eq("email", email.strip().lower())
+            .execute()
+        )
+        users = res.data if res.data else []
+        if not users:
+            return None, "No account found with this email."
+
+        user = users[0]
+        if user.get("status") == "suspended":
+            return None, "This account is suspended. Please contact Paige."
+
+        pwd_hash = hash_password(password)
+        if user.get("password_hash") != pwd_hash:
+            return None, "Incorrect password. Please try again."
+
+        if required_role and user.get("role") != required_role:
+            return None, f"Access restricted. This login is for {required_role}s only."
+
+        return user, "Success"
+    except Exception as e:
+        return None, f"Auth Error: {e}"
+
+
+def register_db_user(email: str, password: str, full_name: str, role: str = "Client", phone: str = ""):
+    """Registers a new user in the app_users table."""
+    try:
+        clean_email = email.strip().lower()
+        check = supabase.table("app_users").select("id").eq("email", clean_email).execute()
+        if check.data and len(check.data) > 0:
+            return False, "An account with this email already exists."
+
+        pwd_hash = hash_password(password)
+        payload = {
+            "email": clean_email,
+            "password_hash": pwd_hash,
+            "full_name": full_name.strip(),
+            "role": role,
+            "phone": phone.strip(),
+            "status": "active",
+        }
+        supabase.table("app_users").insert(payload).execute()
+        return True, "Account registered successfully!"
+    except Exception as e:
+        return False, f"Registration Error: {e}"
+
+
+def reset_user_password_db(email: str, new_password: str):
+    """Updates password hash for a given user email in database."""
+    try:
+        clean_email = email.strip().lower()
+        pwd_hash = hash_password(new_password)
+        res = supabase.table("app_users").update({"password_hash": pwd_hash}).eq("email", clean_email).execute()
+        if res.data:
+            return True, "Password updated successfully!"
+        return False, "User email not found."
+    except Exception as e:
+        return False, f"Password Reset Error: {e}"
+
+
+# ----------------------------------------------------
+# 3. Business Logic Helpers
 # ----------------------------------------------------
 def calculate_session_fee(
     duration_minutes: int,
@@ -138,7 +213,7 @@ def get_data_maps():
 
 
 # ----------------------------------------------------
-# 3. PDF Generator Classes
+# 4. PDF Generator Classes
 # ----------------------------------------------------
 class PDFInvoice(FPDF):
 
@@ -347,7 +422,7 @@ def create_vet_report_pdf(horse_obj, vet_name, clinical_logs):
 
 
 # ----------------------------------------------------
-# 4. Global State & Front-End Landing Session
+# 5. Session State & Database Landing Login
 # ----------------------------------------------------
 barns, horses, barn_map = get_data_maps()
 
@@ -359,7 +434,7 @@ if "auth_name" not in st.session_state:
     st.session_state["auth_name"] = ""
 
 # ----------------------------------------------------
-# FRONT-END LANDING & LOGIN PORTAL (When not logged in)
+# DATABASE-DRIVEN FRONT-END LANDING & LOGIN GATE
 # ----------------------------------------------------
 if st.session_state["auth_user"] is None:
     st.markdown("""
@@ -369,89 +444,93 @@ if st.session_state["auth_user"] is None:
     </div>
     """, unsafe_allow_html=True)
 
-    landing_tab1, landing_tab2, landing_tab3 = st.tabs(["🔐 Client Member Portal Login", "➕ New Client Onboarding & Registration", "👑 Specialist Access (Paige)"])
+    landing_tab1, landing_tab2, landing_tab3 = st.tabs(["🔐 Client Member Portal Login", "➕ New Client Registration & Waiver", "👑 Specialist Sign-In (Paige)"])
 
+    # TAB 1: CLIENT DATABASE LOGIN
     with landing_tab1:
         col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
         with col_l2:
             st.subheader("Client Portal Login")
-            st.caption("Sign in with your registered email to view your horse's therapy logs, ETA, book visits, and manage payments.")
-
-            try:
-                w_res = supabase.table("client_waivers").select("owner_name, client_email").execute()
-                registered_clients = w_res.data if w_res.data else []
-            except Exception:
-                registered_clients = []
-
-            client_email_list = sorted(list(set([w["client_email"] for w in registered_clients if w.get("client_email")])))
+            st.caption("Sign in to your client account using your registered email and password.")
 
             with st.form("client_login_form"):
-                if client_email_list:
-                    c_email = st.selectbox("Select or Type Your Registered Email", client_email_list)
-                else:
-                    c_email = st.text_input("Enter Registered Email", placeholder="owner@barn.ca")
-                
-                c_pwd = st.text_input("Password / Pin", type="password", placeholder="Enter account password (or leave blank if first time)")
+                c_email = st.text_input("Registered Email Address", placeholder="owner@barn.ca")
+                c_pwd = st.text_input("Password", type="password", placeholder="••••••••")
 
-                if st.form_submit_button("Sign In to Client Portal", use_container_width=True):
-                    if c_email:
-                        match_name = next((w["owner_name"] for w in registered_clients if w.get("client_email") == c_email), "Client")
-                        st.session_state["auth_user"] = c_email
-                        st.session_state["auth_role"] = "Client"
-                        st.session_state["auth_name"] = match_name
-                        st.success(f"Welcome back, {match_name}!")
-                        st.rerun()
+                if st.form_submit_button("Sign In to Member Portal", use_container_width=True):
+                    if c_email and c_pwd:
+                        user_obj, msg = authenticate_db_user(c_email, c_pwd, required_role="Client")
+                        if user_obj:
+                            st.session_state["auth_user"] = user_obj.get("email")
+                            st.session_state["auth_role"] = "Client"
+                            st.session_state["auth_name"] = user_obj.get("full_name")
+                            st.success(f"Welcome back, {user_obj.get('full_name')}!")
+                            st.rerun()
+                        else:
+                            st.error(msg)
                     else:
-                        st.warning("Please enter your email.")
+                        st.warning("Please enter your email and password.")
 
+            with st.expander("Forgot / Reset Password?"):
+                with st.form("client_pwd_reset_req"):
+                    r_email = st.text_input("Your Account Email")
+                    r_new_pwd = st.text_input("New Desired Password", type="password")
+                    if st.form_submit_button("Reset Password"):
+                        if r_email and r_new_pwd:
+                            ok, r_msg = reset_user_password_db(r_email, r_new_pwd)
+                            if ok:
+                                st.success(r_msg)
+                            else:
+                                st.error(r_msg)
+                        else:
+                            st.warning("Please fill in email and new password.")
+
+    # TAB 2: NEW CLIENT REGISTRATION + ONBOARDING WAIVER
     with landing_tab2:
-        st.subheader("New Client Onboarding & Liability Waiver")
-        st.caption("Complete this quick intake to register your horse and create your member account.")
+        st.subheader("Create Client Account & Sign Liability Waiver")
+        st.caption("Register your account and horse profile in the Equus database.")
 
-        with st.form("public_landing_waiver_form"):
-            st.markdown("### 1. Owner & Patient Profile")
+        with st.form("public_registration_form"):
+            st.markdown("### 1. Account Credentials & Owner Info")
             col_p1, col_p2 = st.columns(2)
             with col_p1:
-                pub_owner = st.text_input("Your Full Name (Owner / Agent)*")
-                pub_email = st.text_input("Email Address (Used for Portal Login)*")
-                pub_phone = st.text_input("Mobile Phone Number*")
+                reg_name = st.text_input("Full Name (Owner / Agent)*")
+                reg_email = st.text_input("Email Address (Your Portal Username)*")
+                reg_pwd = st.text_input("Create Account Password*", type="password")
             with col_p2:
-                pub_horse = st.text_input("Horse Name (Show / Barn Name)*")
+                reg_phone = st.text_input("Mobile Phone Number*")
+                reg_horse = st.text_input("Horse Name (Show / Barn Name)*")
                 barn_names = [b["name"] for b in barns] if barns else ["Private / Home Facility"]
-                pub_barn = st.selectbox("Stabling Facility / Barn*", barn_names)
-                pub_discipline = st.text_input("Primary Discipline / Breed", placeholder="e.g. Hunter/Jumper, Dressage, Eventing")
+                reg_barn = st.selectbox("Stabling Facility / Barn*", barn_names)
 
-            st.markdown("### 2. Veterinarian & Medical Profile")
+            st.markdown("### 2. Medical & Primary Veterinarian Details")
             col_v1, col_v2 = st.columns(2)
             with col_v1:
-                pub_vet = st.text_input("Primary Veterinarian Name", placeholder="e.g. Dr. Smith (Ottawa Equine)")
+                reg_vet = st.text_input("Primary Veterinarian Name", placeholder="e.g. Dr. Smith")
             with col_v2:
-                pub_vet_phone = st.text_input("Veterinarian Phone Number")
+                reg_vet_phone = st.text_input("Veterinarian Phone Number")
 
-            pub_history = st.text_area(
-                "Current Areas of Discomfort, Stiffness, or Injury History",
-                placeholder="e.g. Tight sacroiliac, recovery from suspensory strain, seasonal cough..."
-            )
+            reg_notes = st.text_area("Medical History / Current Stiffness / Notes for Paige")
 
-            st.markdown("### 3. Modality Authorization")
+            st.markdown("### 3. Modality Authorization & Informed Consent")
             c_hect = st.checkbox("High-Energy Cell Treatment (Equitron-Pro / HECT)", value=True)
             c_halo = st.checkbox("Clinical Dry Aerosol Halotherapy (HaloEQ2)", value=True)
 
-            st.markdown("### 4. Legal Liability Release & Informed Consent")
             st.markdown("""
-            > **Scope of Practice & Acknowledgment:**  
-            > Equus Performance Therapeutics provides non-invasive complementary equine wellness, cellular regeneration (HECT), and respiratory salt therapy (Halotherapy). These modalities do not constitute veterinary medicine, surgery, or pharmacological prescribing. The owner confirms the animal is free of acute contagious diseases and authorizes Paige Cummings to administer non-invasive sessions.
+            > **Scope of Practice & Liability Release:**  
+            > Equus Performance Therapeutics provides complementary non-invasive wellness, cellular regeneration (HECT), and respiratory salt therapy. The owner releases Paige Cummings from liability and confirms the horse is free of acute infectious diseases.
             """)
 
-            pub_agree = st.checkbox("I have read, understood, and accept the liability waiver and terms of service.*")
-            pub_sig = st.text_input("Digital Signature (Type Full Legal Name)*")
+            reg_agree = st.checkbox("I agree to the terms of service and liability waiver.*")
+            reg_sig = st.text_input("Digital Signature (Type Full Legal Name)*")
 
-            if st.form_submit_button("Submit Registration & Log In Now", use_container_width=True):
-                if pub_owner and pub_email and pub_horse and pub_sig:
-                    if not pub_agree:
-                        st.error("You must agree to the liability waiver terms to complete intake.")
+            if st.form_submit_button("Complete Registration & Enter Portal", use_container_width=True):
+                if reg_name and reg_email and reg_pwd and reg_horse and reg_sig:
+                    if not reg_agree:
+                        st.error("You must accept the waiver terms to complete registration.")
                     else:
-                        try:
+                        ok, msg = register_db_user(reg_email, reg_pwd, reg_name, role="Client", phone=reg_phone)
+                        if ok:
                             modalities = []
                             if c_hect:
                                 modalities.append("Equitron-Pro (HECT)")
@@ -459,59 +538,67 @@ if st.session_state["auth_user"] is None:
                                 modalities.append("HaloEQ2 (Halotherapy)")
 
                             supabase.table("client_waivers").insert({
-                                "owner_name": pub_owner,
-                                "client_email": pub_email,
-                                "horse_name": pub_horse,
-                                "primary_veterinarian": pub_vet,
-                                "vet_phone": pub_vet_phone,
+                                "owner_name": reg_name,
+                                "client_email": reg_email.strip().lower(),
+                                "horse_name": reg_horse,
+                                "primary_veterinarian": reg_vet,
+                                "vet_phone": reg_vet_phone,
                                 "modality_consent": modalities,
                                 "waiver_agreed": True,
-                                "signature_name": pub_sig,
+                                "signature_name": reg_sig,
                             }).execute()
 
-                            existing_horses = [h for h in horses if h.get("name", "").lower() == pub_horse.lower()]
-                            if not existing_horses and barns:
-                                barn_id_match = next((b["id"] for b in barns if b["name"] == pub_barn), barns[0]["id"])
+                            existing_h = [h for h in horses if h.get("name", "").lower() == reg_horse.lower()]
+                            if not existing_h and barns:
+                                barn_id_match = next((b["id"] for b in barns if b["name"] == reg_barn), barns[0]["id"])
                                 supabase.table("horses").insert({
-                                    "name": pub_horse,
-                                    "owner_name": pub_owner,
+                                    "name": reg_horse,
+                                    "owner_name": reg_name,
                                     "barn_id": barn_id_match,
                                     "is_marketing_tier": False,
                                     "minutes_used_this_month": 0,
                                 }).execute()
 
-                            st.session_state["auth_user"] = pub_email
+                            st.session_state["auth_user"] = reg_email.strip().lower()
                             st.session_state["auth_role"] = "Client"
-                            st.session_state["auth_name"] = pub_owner
-                            st.success(f"🎉 Account created! Welcome, {pub_owner}!")
+                            st.session_state["auth_name"] = reg_name
+                            st.success(f"🎉 Account created! Welcome, {reg_name}!")
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"Submission error: {e}")
+                        else:
+                            st.error(msg)
                 else:
                     st.warning("Please fill in all required fields marked with *.")
 
+    # TAB 3: SPECIALIST / ADMIN DATABASE LOGIN
     with landing_tab3:
         col_a1, col_a2, col_a3 = st.columns([1, 2, 1])
         with col_a2:
-            st.subheader("👑 Specialist & Admin Access")
-            st.caption("Restricted login for Paige Cummings and authorized clinicians.")
+            st.subheader("👑 Specialist Sign-In (Paige)")
+            st.caption("Secure admin login stored in your Supabase app_users table.")
 
             with st.form("admin_login_form"):
-                admin_user = st.text_input("Specialist Username / Email", placeholder="paige@equusperformance.ca")
-                admin_pass = st.text_input("Admin PIN / Password", type="password")
+                admin_email = st.text_input("Specialist Email", placeholder="paige@equusperformance.ca")
+                admin_pass = st.text_input("Admin Password", type="password")
 
-                if st.form_submit_button("Access Specialist Hub", use_container_width=True):
-                    st.session_state["auth_user"] = admin_user if admin_user else "paige@equusperformance.ca"
-                    st.session_state["auth_role"] = "Admin"
-                    st.session_state["auth_name"] = "Paige Cummings"
-                    st.success("Authenticated as Specialist!")
-                    st.rerun()
+                if st.form_submit_button("Sign In as Administrator", use_container_width=True):
+                    if admin_email and admin_pass:
+                        admin_user, msg = authenticate_db_user(admin_email, admin_pass, required_role="Admin")
+                        if admin_user:
+                            st.session_state["auth_user"] = admin_user.get("email")
+                            st.session_state["auth_role"] = "Admin"
+                            st.session_state["auth_name"] = admin_user.get("full_name", "Paige Cummings")
+                            st.success("Authenticated as Administrator!")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("Please provide your admin email and password.")
 
     st.stop()
 
 
 # ----------------------------------------------------
-# 5. AUTHENTICATED USER SESSIONS (Client vs Specialist)
+# 6. AUTHENTICATED SESSIONS (Client vs Paige Specialist)
 # ----------------------------------------------------
 st.sidebar.title("🐎 EquusOS")
 st.sidebar.markdown(f"**Logged in:** `{st.session_state['auth_name']}` ({st.session_state['auth_role']})")
@@ -524,7 +611,9 @@ if st.sidebar.button("🚪 Sign Out"):
 
 st.sidebar.divider()
 
-# --- CLIENT WORKFLOW ---
+# ====================================================
+# A. CLIENT MEMBER PORTAL EXPERIENCE
+# ====================================================
 if st.session_state["auth_role"] == "Client":
     matched_owner_name = st.session_state["auth_name"]
     active_client_email = st.session_state["auth_user"]
@@ -673,7 +762,9 @@ if st.session_state["auth_role"] == "Client":
     st.stop()
 
 
-# --- SPECIALIST / ADMIN WORKFLOW (PAIGE) ---
+# ====================================================
+# B. SPECIALIST / ADMIN WORKFLOW (PAIGE)
+# ====================================================
 CATEGORY_WORKFLOWS = {
     "🐎 Daily Clinical Hub": [
         "Log Treatments & Live Feed",
@@ -687,7 +778,8 @@ CATEGORY_WORKFLOWS = {
         "Smart Route Booking & Mileage",
         "Client Re-booking & Reminders",
     ],
-    "👥 Clients & Facilities": [
+    "👥 User & Client Management": [
+        "User Database & Credentials",
         "Manage Clients & Appointments",
         "Public Intake & Barn QR Code",
         "Signed Waivers & Onboarding",
@@ -708,11 +800,89 @@ selected_category = st.sidebar.selectbox("📂 Workspace Section", list(CATEGORY
 page = st.sidebar.radio("📌 Select Module", CATEGORY_WORKFLOWS[selected_category])
 
 # ----------------------------------------------------
+# PAGE: USER DATABASE & CREDENTIAL MANAGEMENT
+# ----------------------------------------------------
+if page == "User Database & Credentials":
+    st.title("👥 User Database & Access Management")
+    st.markdown("View all registered user accounts, reset passwords, change user roles, and provision admin or clinician credentials.")
+
+    try:
+        users_res = supabase.table("app_users").select("*").order("created_at", desc=True).execute()
+        all_app_users = users_res.data if users_res.data else []
+    except Exception:
+        all_app_users = []
+
+    col_u1, col_u2 = st.columns([1, 1])
+
+    with col_u1:
+        with st.expander("➕ Provision New User Account", expanded=True):
+            with st.form("create_app_user_form"):
+                u_name = st.text_input("Full Name*")
+                u_email = st.text_input("Email Address (Username)*")
+                u_pwd = st.text_input("Temporary Password*", type="password")
+                u_role = st.selectbox("Role", ["Client", "Admin", "Clinician Associate"])
+                u_phone = st.text_input("Phone Number")
+
+                if st.form_submit_button("Create Database User"):
+                    if u_name and u_email and u_pwd:
+                        ok, msg = register_db_user(u_email, u_pwd, u_name, role=u_role, phone=u_phone)
+                        if ok:
+                            st.success(f"Created {u_role} account for {u_name} ({u_email})!")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("Please fill in all required fields.")
+
+    with col_u2:
+        with st.expander("🔑 Reset User Password / Change Status", expanded=True):
+            if all_app_users:
+                user_dict = {f"{u['full_name']} ({u['email']}) - [{u['role']}]": u for u in all_app_users}
+                sel_u_label = st.selectbox("Select User Account", list(user_dict.keys()))
+                target_u = user_dict[sel_u_label]
+
+                with st.form("admin_pwd_reset_form"):
+                    new_u_pwd = st.text_input("Set New Password", type="password")
+                    new_u_status = st.selectbox("Account Status", ["active", "suspended"], index=0 if target_u.get("status") == "active" else 1)
+                    new_u_role = st.selectbox("Assign Role", ["Client", "Admin", "Clinician Associate"], index=["Client", "Admin", "Clinician Associate"].index(target_u.get("role", "Client")))
+
+                    if st.form_submit_button("Update User Credentials"):
+                        try:
+                            update_payload = {"status": new_u_status, "role": new_u_role}
+                            if new_u_pwd:
+                                update_payload["password_hash"] = hash_password(new_u_pwd)
+
+                            supabase.table("app_users").update(update_payload).eq("id", target_u["id"]).execute()
+                            st.success(f"Updated account for {target_u['full_name']}!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error updating user: {e}")
+            else:
+                st.info("No app users registered in the database yet.")
+
+    st.subheader("Registered App Users & Roles")
+    if all_app_users:
+        user_table = [
+            {
+                "Full Name": u.get("full_name"),
+                "Email / Username": u.get("email"),
+                "Role": u.get("role"),
+                "Phone": u.get("phone", ""),
+                "Status": "🟢 Active" if u.get("status") == "active" else "🔴 Suspended",
+                "Created Date": str(u.get("created_at", ""))[:10],
+            }
+            for u in all_app_users
+        ]
+        st.dataframe(pd.DataFrame(user_table), use_container_width=True)
+    else:
+        st.write("No user records found.")
+
+# ----------------------------------------------------
 # PAGE: SPECIALIST MANAGE CLIENTS & APPOINTMENTS
 # ----------------------------------------------------
-if page == "Manage Clients & Appointments":
-    st.title("👥 Paige's Master Client & Booking Manager")
-    st.markdown("Manage client profiles, book sessions on their behalf, cancel or reschedule visits, and handle account updates.")
+elif page == "Manage Clients & Appointments":
+    st.title("👥 Master Client Profile & Booking Manager")
+    st.markdown("Manage client profiles, book sessions on their behalf, and cancel or reschedule visits.")
 
     try:
         w_res = supabase.table("client_waivers").select("*").order("created_at", desc=True).execute()
@@ -751,7 +921,6 @@ if page == "Manage Clients & Appointments":
 
         with col_m2:
             st.subheader("2. Book / Reschedule / Cancel for Client")
-            
             client_horse_match = next((h for h in horses if h.get("name", "").lower() == active_c.get("horse_name", "").lower()), None)
             
             with st.form("paige_booking_client_form"):
@@ -1630,14 +1799,14 @@ elif page == "Public Intake & Barn QR Code":
             value="https://equusos.streamlit.app",
             help="Replace with your live Streamlit Cloud domain"
         )
-        intake_url = f"{app_base_url.rstrip('/')}/?mode=intake"
+        intake_url = f"{app_base_url.rstrip('/')}"
 
-        st.info(f"🔗 **Public Intake URL:** `{intake_url}`")
+        st.info(f"🔗 **Public Member Portal URL:** `{intake_url}`")
 
         encoded_url = urllib.parse.quote(intake_url)
         qr_image_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={encoded_url}&bgcolor=ffffff&color=1e293b&margin=10"
 
-        st.image(qr_image_url, caption="Scan with any smartphone camera to open intake form", width=250)
+        st.image(qr_image_url, caption="Scan with any smartphone camera to open member portal & intake", width=250)
 
     with col_q2:
         st.subheader("Printable Barn Notice Preview")
@@ -1646,7 +1815,7 @@ elif page == "Public Intake & Barn QR Code":
             <h2 style="margin: 0; color: #0f172a;">🐎 EQUUS PERFORMANCE</h2>
             <p style="margin: 4px 0 16px 0; font-size: 14px; color: #64748b;">CELLULAR REGENERATION & HALOTHERAPY</p>
             <hr style="border: 0; height: 1px; background: #cbd5e1; margin-bottom: 16px;">
-            <p style="font-weight: bold; margin-bottom: 12px;">Scan to Complete Pre-Session Intake & Waiver</p>
+            <p style="font-weight: bold; margin-bottom: 12px;">Scan to Access Client Portal & Registration</p>
             <img src="{qr_image_url}" width="180" style="border-radius: 8px; margin-bottom: 12px;"/>
             <p style="font-size: 12px; color: #475569;">Or visit: <br><code>{intake_url}</code></p>
             <p style="font-size: 11px; color: #94a3b8; margin-top: 12px;">Equus Performance Therapeutics | Paige Cummings</p>
